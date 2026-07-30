@@ -1,6 +1,6 @@
 # Resources
 
-Primary references for building Walkr. Detailed design notes will be added as the implementation is finalized.
+Primary references for building Max. Detailed design notes will be added as the implementation is finalized.
 
 ## Hackathon
 
