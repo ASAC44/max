@@ -16,7 +16,7 @@ setup(
         ("share/max_robot/references", glob("references/*")),
         ("share/max_robot/worlds", glob("worlds/*")),
     ],
-    install_requires=["setuptools", "numpy"],
+    install_requires=["setuptools", "numpy", "stripe>=15.3.1,<16"],
     zip_safe=True,
     entry_points={
         "console_scripts": [

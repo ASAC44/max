@@ -4,6 +4,7 @@ import argparse
 import time
 
 from .core import LocalizationState, MissionManager, SafetyGate
+from .payments import PaymentService
 from .web import serve_in_thread
 
 
@@ -12,6 +13,11 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--pin", required=True)
+    parser.add_argument(
+        "--payments",
+        action="store_true",
+        help="enable test-mode Stripe checkout endpoints",
+    )
     parser.add_argument(
         "--demo",
         action="store_true",
@@ -23,8 +29,13 @@ def main() -> None:
         gate.localization = LocalizationState.TRACKING
         gate.heartbeat_timeout_s = 2
     manager = MissionManager(gate)
+    payments = PaymentService.from_environment() if args.payments else None
     server, _ = serve_in_thread(
-        manager, host=args.host, port=args.port, operator_pin=args.pin
+        manager,
+        host=args.host,
+        port=args.port,
+        operator_pin=args.pin,
+        payments=payments,
     )
     print(f"Max control: http://{args.host}:{server.server_port}")
     try:

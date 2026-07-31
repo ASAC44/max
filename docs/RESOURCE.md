@@ -11,6 +11,8 @@ Primary references for building Max. Detailed design notes will be added as the 
 
 - [Prava documentation](https://docs.prava.space/)
 - [Choosing a Prava integration](https://docs.prava.space/choosing-your-integration)
+- [Stripe Checkout Sessions](https://docs.stripe.com/api/checkout/sessions/create)
+- [Stripe webhook verification](https://docs.stripe.com/webhooks)
 
 ## Voice
 
