@@ -41,6 +41,23 @@ courier.
 
 Built for the [Agentic Commerce Hackathon](https://agentic-commerce.devfolio.co/overview).
 
+## Repository layout
+
+```text
+apps/
+├── api/    # Max agent, mission workflow, persistence, integrations
+│   ├── src/
+│   └── tests/
+├── web/    # admin dashboard
+│   ├── public/
+│   └── src/
+└── robot/  # navigation team's ROS 2 package, simulation, and tests
+docs/       # shared project documentation
+```
+
+The API consumes the robot interface delivered by the navigation team; it does
+not duplicate robot or navigation logic.
+
 ## Phase 1: navigation without hardware
 
 The repository now contains a ROS 2/Gazebo implementation for developing the
@@ -60,6 +77,7 @@ added. The BTS7960 is a motor driver, not an odometry sensor.
 Run the dependency-free core checks:
 
 ```bash
+cd apps/robot
 python3 -m unittest discover -s tests -v
 ```
 

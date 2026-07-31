@@ -48,25 +48,27 @@ localization; detected obstruction; or emergency stop forces a zero command.
 
 ## Implemented components
 
-- `max_robot/core.py`: mission state machine and movement safety gate.
-- `max_robot/navigation.py`: differential-drive waypoint follower.
-- `max_robot/obstruction.py`: obstruction hysteresis, reference comparison,
-  and optical-flow time-to-collision.
-- `max_robot/web.py`: PIN-protected local control API and page.
-- `max_robot/ros_node.py`: ROS integration, route execution, and zero-command
-  watchdog.
-- `max_robot/vision_node.py`: live obstruction node and reference-frame
+- `apps/robot/max_robot/core.py`: mission state machine and movement safety gate.
+- `apps/robot/max_robot/navigation.py`: differential-drive waypoint follower.
+- `apps/robot/max_robot/obstruction.py`: obstruction hysteresis, reference
+  comparison, and optical-flow time-to-collision.
+- `apps/robot/max_robot/web.py`: PIN-protected local control API and page.
+- `apps/robot/max_robot/ros_node.py`: ROS integration, route execution, and
+  zero-command watchdog.
+- `apps/robot/max_robot/vision_node.py`: live obstruction node and reference-frame
   recorder.
-- `launch/`: simulation, mapping, and localization/navigation launches.
-- `models/` and `worlds/`: differential-drive robot and indoor Gazebo course.
-- `config/`: RTAB-Map, AprilTag, Gazebo bridge, route, and safety thresholds.
+- `apps/robot/launch/`: simulation, mapping, and localization/navigation launches.
+- `apps/robot/models/` and `apps/robot/worlds/`: differential-drive robot and
+  indoor Gazebo course.
+- `apps/robot/config/`: RTAB-Map, AprilTag, Gazebo bridge, route, and safety thresholds.
 
 ## Development environment
 
 Use Ubuntu 26.04, ROS 2 Lyrical, and Gazebo Jetty. Jetty is the supported
 Gazebo pairing for Lyrical.
 
-Install the ROS packages required by `package.xml`, then put this repository
+The ROS package lives in `apps/robot`. Install the packages required by
+`apps/robot/package.xml`, then put this repository
 inside a ROS workspace:
 
 ```bash
@@ -78,6 +80,9 @@ rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --packages-select max_robot
 source install/setup.bash
 ```
+
+Run the remaining package-local commands below from `apps/robot` in the cloned
+repository unless a command says otherwise.
 
 The pure core tests do not require ROS, Gazebo, or OpenCV:
 
@@ -122,9 +127,9 @@ At each waypoint, request the corresponding index:
 ros2 topic pub --once /route/waypoint_index std_msgs/msg/Int32 "{data: 0}"
 ```
 
-Repeat for every index in `config/route.json`. Each request saves one rectified
-frame as `references/<index>.png`. Missing frames cause the obstruction node to
-stop, not continue blindly.
+Repeat for every index in `apps/robot/config/route.json`. Each request saves one
+rectified frame as `apps/robot/references/<index>.png`. Missing frames cause the
+obstruction node to stop, not continue blindly.
 
 ### 4. Run localization and route control
 
