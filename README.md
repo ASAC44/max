@@ -26,3 +26,28 @@ Max gives the personal agent a physical presence. You tell it what you need; it 
 Max is not another delivery platform. It belongs to one person and acts for that person; more like a capable robotic companion than a public courier.
 
 Built for the [Agentic Commerce Hackathon](https://agentic-commerce.devfolio.co/overview).
+
+## Phase 1: navigation without hardware
+
+The repository now contains a ROS 2/Gazebo implementation for developing the
+first indoor pickup-and-return route before the robot hardware arrives:
+
+- RTAB-Map visual SLAM with wheel odometry
+- AprilTag checkpoints
+- camera-only obstruction stopping
+- teach-and-repeat route following
+- local web controls and a fail-closed safety gate
+
+The current Raspberry Pi 5, Camera Module 3, and BTS7960 hardware has no wheel
+encoders. Simulation works with virtual wheel odometry, but autonomous movement
+on the physical robot remains disabled until a measured odometry source is
+added. The BTS7960 is a motor driver, not an odometry sensor.
+
+Run the dependency-free core checks:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+See [the hardware-free navigation plan](docs/AI_NAVIGATION_PLAN.md) for the
+ROS/Gazebo setup, test workflow, limits, and hardware-arrival checklist.

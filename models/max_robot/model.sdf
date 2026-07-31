@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<sdf version="1.11">
+  <model name="max">
+    <pose>0 0 0.13 0 0 0</pose>
+    <link name="base_link">
+      <inertial>
+        <mass>5</mass>
+        <inertia>
+          <ixx>0.08</ixx><iyy>0.10</iyy><izz>0.12</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="body_collision">
+        <geometry><box><size>0.42 0.32 0.18</size></box></geometry>
+      </collision>
+      <visual name="body_visual">
+        <geometry><box><size>0.42 0.32 0.18</size></box></geometry>
+        <material><diffuse>0.15 0.25 0.8 1</diffuse></material>
+      </visual>
+      <sensor name="camera" type="camera">
+        <pose>0.19 0 0.12 0 0 0</pose>
+        <topic>/camera</topic>
+        <update_rate>30</update_rate>
+        <camera>
+          <horizontal_fov>1.15</horizontal_fov>
+          <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+          <clip><near>0.05</near><far>20</far></clip>
+        </camera>
+        <always_on>true</always_on>
+      </sensor>
+    </link>
+
+    <link name="left_wheel">
+      <pose>0 0.18 0 1.5708 0 0</pose>
+      <inertial><mass>0.25</mass><inertia><ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz></inertia></inertial>
+      <collision name="collision"><geometry><cylinder><radius>0.065</radius><length>0.035</length></cylinder></geometry></collision>
+      <visual name="visual"><geometry><cylinder><radius>0.065</radius><length>0.035</length></cylinder></geometry></visual>
+    </link>
+    <joint name="left_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>left_wheel</child>
+      <axis><xyz>0 1 0</xyz></axis>
+    </joint>
+
+    <link name="right_wheel">
+      <pose>0 -0.18 0 1.5708 0 0</pose>
+      <inertial><mass>0.25</mass><inertia><ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz></inertia></inertial>
+      <collision name="collision"><geometry><cylinder><radius>0.065</radius><length>0.035</length></cylinder></geometry></collision>
+      <visual name="visual"><geometry><cylinder><radius>0.065</radius><length>0.035</length></cylinder></geometry></visual>
+    </link>
+    <joint name="right_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>right_wheel</child>
+      <axis><xyz>0 1 0</xyz></axis>
+    </joint>
+
+    <link name="rear_caster">
+      <pose>-0.16 0 -0.055 0 0 0</pose>
+      <inertial><mass>0.1</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="collision"><geometry><sphere><radius>0.025</radius></sphere></geometry></collision>
+      <visual name="visual"><geometry><sphere><radius>0.025</radius></sphere></geometry></visual>
+    </link>
+    <joint name="rear_caster_joint" type="fixed">
+      <parent>base_link</parent><child>rear_caster</child>
+    </joint>
+
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>0.36</wheel_separation>
+      <wheel_radius>0.065</wheel_radius>
+      <topic>/cmd_vel</topic>
+      <odom_topic>/wheel/odom</odom_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_link</child_frame_id>
+    </plugin>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher"/>
+  </model>
+</sdf>

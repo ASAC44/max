@@ -1,0 +1,15 @@
+rtabmap:
+  ros__parameters:
+    frame_id: base_link
+    map_frame_id: map
+    odom_frame_id: odom
+    subscribe_rgb: true
+    subscribe_depth: false
+    subscribe_scan: false
+    approx_sync: true
+    wait_for_transform: 0.2
+    "Mem/IncrementalMemory": "true"
+    "Mem/InitWMWithAllNodes": "false"
+    "RGBD/LinearUpdate": "0.08"
+    "RGBD/AngularUpdate": "0.08"
+    "Vis/MinInliers": "15"

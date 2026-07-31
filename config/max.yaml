@@ -1,0 +1,14 @@
+max_control:
+  ros__parameters:
+    web_host: "0.0.0.0"
+    web_port: 8080
+    max_linear_speed: 0.15
+    minimum_tag_margin: 30.0
+
+max_obstruction:
+  ros__parameters:
+    difference_ratio: 0.08
+    ttc_seconds: 1.5
+    minimum_tracks: 30
+    confirmation_frames: 3
+    clear_seconds: 5.0
