@@ -2,28 +2,42 @@
 
 **An embodied AI agent that moves, pays, carries, and acts on your behalf.**
 
-Max is a voice-controlled robot that handles real-world tasks on its owner's behalf. It can understand a request, travel to where the task needs to happen, carry items, make an authorized payment, and return with the result.
+Max is a voice-controlled personal robot that turns a spoken request into a
+completed real-world errand. It can find an item from a supported online
+merchant, prepare the purchase, get its owner's approval, pay securely, travel
+to the pickup point, and carry the item back.
 
 ## The idea
 
-AI assistants can search, plan, and pay online, but they stop at the edge of the screen. Physical errands still require a person to leave what they are
-doing, travel somewhere, wait, pay, and carry something back.
+AI agents can reason, coordinate, and transact, but they remain trapped behind a
+screen. They can decide what should happen in the real world, yet cannot go
+there, act, or bring back the result.
 
-Max gives the personal agent a physical presence. You tell it what you need; it works out the task and goes.
+Max gives the agent a body. A request no longer ends as an answer or a digital
+transaction; it becomes a completed physical action.
 
 ## What Max does
 
-- Accepts errands through natural voice conversation
-- Plans and carries out physical missions
-- Navigates to real-world destinations
-- Collects and securely carries items
+- Understands errands through natural voice conversation
+- Finds suitable products from supported merchants
+- Prepares the order and asks for clarification when needed
 - Makes owner-authorized payments through [Prava](https://www.prava.space/)
+- Travels to the pickup point and securely carries the item back
 - Reports progress through [Linq](https://linqapp.com/) and asks for help when
   necessary
 
+## The experience
+
+Tell Max what you need. Its agent finds the right option, prepares the purchase,
+and presents the exact order for approval. After payment, Max travels to the
+pickup point, collects the prepared package, and returns it to you.
+
 ## Why it is different
 
-Max is not another delivery platform. It belongs to one person and acts for that person; more like a capable robotic companion than a public courier.
+Max connects agentic commerce with the physical world. It does not stop after
+placing an order, and it is not another public delivery platform. Max belongs to
+one person and acts for that person—more like a capable robotic companion than a
+courier.
 
 Built for the [Agentic Commerce Hackathon](https://agentic-commerce.devfolio.co/overview).
 
