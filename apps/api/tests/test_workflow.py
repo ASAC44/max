@@ -14,12 +14,16 @@ from max_api.schemas import Phase
 from max_api.workflow import (
     Conflict,
     apply_intent,
+    arm_delivery_dispatch,
     approve_quote,
+    bind_delivery_order,
     cancel,
     create_mission,
     finalize_checkout,
     package_ready,
     recover_in_progress_attempts,
+    record_robot_dispatched,
+    record_robot_progress,
     record_prava_payment_state,
     record_prava_session,
     requote,
@@ -274,6 +278,30 @@ def test_pending_mission_can_be_cancelled(session):
     mission = ready_for_approval(session, "cancel-create")
     cancelled = cancel(session, mission.id, mission.version, "cancel-success")
     assert cancelled.phase == Phase.CANCELLED
+
+
+def test_delivery_must_be_bound_and_armed_before_dispatch(session):
+    declined = complete_decline(session)
+    mission = start_staged_fulfilment(session, declined.id, declined.version, "tracking-stage")
+    mission = bind_delivery_order(
+        session, mission.id, mission.version, "bind-order", "order-private-1234", 12.9, 77.5
+    )
+    assert mission.delivery["order_reference"] == "…1234"
+    assert "order-private-1234" not in json.dumps(mission_view := {
+        "order_reference": mission.delivery["order_reference"],
+        "status": mission.delivery["status"],
+    })
+    with pytest.raises(Conflict):
+        record_robot_dispatched(session, mission, "dispatch-before-arm")
+    mission = arm_delivery_dispatch(session, mission.id, mission.version, "arm-order")
+    mission = record_robot_dispatched(session, mission, "dispatch-order")
+    assert mission.phase == Phase.EN_ROUTE_TO_PICKUP
+    assert mission.delivery["robot_status"] == "OUTBOUND"
+    mission = record_robot_progress(session, mission, "AT_PICKUP")
+    mission = record_robot_progress(session, mission, "RETURNING")
+    mission = record_robot_progress(session, mission, "COMPLETE")
+    assert mission.phase == Phase.COMPLETED
+    assert "order_id" not in mission.delivery
 
 
 def test_only_one_root_mission_can_be_active(session):

@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass, field as dataclass_field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse
@@ -46,6 +46,19 @@ class PravaCredential:
     dynamic_cvv: str = dataclass_field(repr=False)
     expiry_month: str = dataclass_field(repr=False)
     expiry_year: str = dataclass_field(repr=False)
+
+
+@dataclass(frozen=True)
+class SwiggyOrder:
+    order_id: str
+    latitude: float = dataclass_field(repr=False)
+    longitude: float = dataclass_field(repr=False)
+
+
+@dataclass(frozen=True)
+class SwiggyDelivery:
+    status: str
+    eta_at: datetime
 
 
 class BrowserCheckoutError(IntegrationError):
@@ -99,6 +112,37 @@ def _text(data: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
+def _number(data: Any, *keys: str) -> float | None:
+    for key in keys:
+        value = _find(data, key)
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _instant(value: Any) -> datetime | None:
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        seconds = float(value)
+        if seconds > 10_000_000_000:
+            seconds /= 1000
+        if seconds < 1_000_000_000:
+            return None
+        try:
+            return datetime.fromtimestamp(seconds, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except ValueError:
+            return None
+    return None
+
+
 def _tool_payload(result: Any) -> dict[str, Any]:
     if result.isError:
         raise IntegrationError("Swiggy rejected an MCP operation")
@@ -125,6 +169,34 @@ def _tool_arguments(tool: Any, values: dict[str, Any]) -> dict[str, Any]:
 
 class SwiggyClient:
     endpoint = "https://mcp.swiggy.com/im"
+
+    def __init__(self) -> None:
+        self._stdio_context = None
+        self._client_context = None
+        self._session = None
+        self._tools = None
+
+    async def __aenter__(self):
+        server = StdioServerParameters(command="npx", args=["--yes", "mcp-remote", self.endpoint])
+        try:
+            self._stdio_context = stdio_client(server, errlog=subprocess.DEVNULL)
+            read, write = await self._stdio_context.__aenter__()
+            self._client_context = ClientSession(read, write)
+            self._session = await self._client_context.__aenter__()
+            await self._session.initialize()
+            self._tools = {tool.name: tool for tool in (await self._session.list_tools()).tools}
+            return self
+        except Exception:
+            await self.__aexit__(None, None, None)
+            raise
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        try:
+            if self._client_context:
+                await self._client_context.__aexit__(exc_type, exc, traceback)
+        finally:
+            if self._stdio_context:
+                await self._stdio_context.__aexit__(exc_type, exc, traceback)
 
     async def quote(self, intent: ShoppingIntent) -> Quote:
         server = StdioServerParameters(
@@ -254,6 +326,65 @@ class SwiggyClient:
             matches_quantity = False
         if not matches_quantity:
             raise IntegrationError("Swiggy cart quantity changed after approval; do not submit payment")
+
+    async def resolve_active_order(self, quote: Quote) -> SwiggyOrder:
+        payload = await self._read_tool("get_orders", {"activeOnly": True, "count": 20})
+        matches: list[SwiggyOrder] = []
+        for order in _list(payload, "orders"):
+            order_id = _text(order, "orderId", "order_id", "id")
+            address = order.get("deliveryAddress") or order.get("delivery_address") or order.get("address")
+            lat = _number(address, "lat", "latitude") if isinstance(address, dict) else None
+            lng = _number(address, "lng", "longitude") if isinstance(address, dict) else None
+            if not order_id or lat is None or lng is None:
+                continue
+            total = _find(order, "total") or _find(order, "orderTotal") or _find(order, "totalAmount")
+            if total is not None:
+                try:
+                    if _minor(total) != quote.amount_minor:
+                        continue
+                except IntegrationError:
+                    continue
+            matches.append(SwiggyOrder(order_id, lat, lng))
+        if len(matches) != 1:
+            raise IntegrationError("Swiggy active order could not be identified uniquely; bind it manually")
+        return matches[0]
+
+    async def track_order(self, order: SwiggyOrder) -> SwiggyDelivery:
+        payload = await self._read_tool(
+            "track_order",
+            {"orderId": order.order_id, "lat": order.latitude, "lng": order.longitude},
+        )
+        raw_status = str(_find(payload, "orderStatus") or _find(payload, "deliveryStatus") or _find(payload, "status") or "UNKNOWN")
+        status = re.sub(r"[^A-Z0-9]+", "_", raw_status.upper()).strip("_")
+        eta = None
+        for key in ("etaEpoch", "eta_epoch", "deliveryEta", "estimatedDeliveryTime", "eta"):
+            eta = _instant(_find(payload, key))
+            if eta:
+                break
+        if not eta:
+            raise IntegrationError("Swiggy tracking response has no absolute ETA")
+        return SwiggyDelivery(status, eta.astimezone(timezone.utc))
+
+    async def _read_tool(self, name: str, values: dict[str, Any]) -> dict[str, Any]:
+        if self._session is not None and self._tools is not None:
+            if name not in self._tools:
+                raise IntegrationError(f"Swiggy MCP is missing required tool {name}")
+            return _tool_payload(await self._session.call_tool(
+                name, _tool_arguments(self._tools[name], values)
+            ))
+        server = StdioServerParameters(command="npx", args=["--yes", "mcp-remote", self.endpoint])
+        try:
+            async with stdio_client(server, errlog=subprocess.DEVNULL) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+                    if name not in tools:
+                        raise IntegrationError(f"Swiggy MCP is missing required tool {name}")
+                    return _tool_payload(await session.call_tool(name, _tool_arguments(tools[name], values)))
+        except IntegrationError:
+            raise
+        except Exception as exc:
+            raise IntegrationError("Swiggy MCP tracking failed; complete OAuth setup and retry") from exc
 
     @staticmethod
     def _select_address(payload: dict[str, Any], destination: str) -> dict[str, Any]:

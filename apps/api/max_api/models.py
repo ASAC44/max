@@ -39,6 +39,7 @@ class Mission(Base):
     checkout_status: Mapped[str] = mapped_column(String(32), nullable=False)
     fulfilment_status: Mapped[str] = mapped_column(String(32), nullable=False)
     notification_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    delivery: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 

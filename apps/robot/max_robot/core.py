@@ -87,11 +87,14 @@ class MissionManager:
         self.safety = safety or SafetyGate()
         self.state = MissionState.IDLE
         self.last_reason = ""
+        self.mission_id: str | None = None
         self._resume_state: MissionState | None = None
         self._lock = threading.RLock()
 
-    def start(self, now: float | None = None) -> None:
+    def start(self, now: float | None = None, mission_id: str | None = None) -> None:
         with self._lock:
+            if self.state is MissionState.OUTBOUND and mission_id and mission_id == self.mission_id:
+                return
             if self.state not in {
                 MissionState.IDLE,
                 MissionState.COMPLETE,
@@ -99,6 +102,7 @@ class MissionManager:
             }:
                 raise InvalidTransition(f"cannot start from {self.state}")
             self._require_safe(now)
+            self.mission_id = mission_id
             self.state = MissionState.OUTBOUND
             self.last_reason = ""
 
@@ -204,6 +208,7 @@ class MissionManager:
             reasons = self.safety.reasons(now)
             return {
                 "mission": self.state,
+                "mission_id": self.mission_id,
                 "localization": self.safety.localization,
                 "obstruction": self.safety.obstruction,
                 "emergency_stop": self.safety.emergency_stop,

@@ -69,6 +69,14 @@ class MissionTests(unittest.TestCase):
         manager.release_emergency_stop()
         self.assertEqual(manager.state, MissionState.IDLE)
 
+    def test_same_mission_start_is_idempotent(self) -> None:
+        manager = MissionManager(ready_gate())
+        manager.start(10.0, "mission-1")
+        manager.start(10.0, "mission-1")
+        self.assertEqual(manager.status(10.0)["mission_id"], "mission-1")
+        with self.assertRaises(InvalidTransition):
+            manager.start(10.0, "mission-2")
+
 
 if __name__ == "__main__":
     unittest.main()
