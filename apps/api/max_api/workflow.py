@@ -88,6 +88,7 @@ def _event_metadata(
         "MISSION_CANCELLED",
         "MISSION_CLOSED_UNRESOLVED",
         "PACKAGE_READY",
+        "ROBOT_DISPATCH_ARMED",
     }
     if event_type == "AGENT_INTERPRETATION_FAILED":
         provider = "OPENAI" if agent_mode == "openai" else "SIMULATED_PARSER"
@@ -97,7 +98,7 @@ def _event_metadata(
         return "agent", provider, human, mission_environment
     if event_type in {"SIMULATED_QUOTE_CREATED", "QUOTE_CHANGED_APPROVAL_INVALIDATED", "QUOTE_EXPIRED"}:
         return "commerce", "SIMULATED_SWIGGY", human, mission_environment
-    if event_type == "SWIGGY_QUOTE_CREATED":
+    if event_type in {"SWIGGY_QUOTE_CREATED", "SWIGGY_ORDER_BOUND"}:
         return "commerce", "SWIGGY_INSTAMART_MCP", human, Environment.PRODUCTION
     if event_type.startswith("SWIGGY_BROWSER_"):
         return "commerce", "SWIGGY_BROWSER", human, Environment.PRODUCTION
@@ -113,7 +114,8 @@ def _event_metadata(
         environment = Environment.STAGED if event_type == "SIMULATED_ORDER_CONFIRMED" else Environment.LOCAL
         return "commerce", "SIMULATED_SWIGGY", human, environment
     if "ROBOT" in event_type or event_type == "SIMULATED_ITEM_SECURED":
-        return "robot", "SIMULATED_ROBOT", human, Environment.LOCAL
+        provider = "SIMULATED_ROBOT" if event_type.startswith("SIMULATED_") else "MAX_ROBOT"
+        return "robot", provider, human, Environment.LOCAL
     if "NOTIFICATION" in event_type:
         return "notification", "SIMULATED_NOTIFICATION", human, Environment.LOCAL
     return "orchestrator", None, human, mission_environment
@@ -150,6 +152,11 @@ def _transition(
     values = {**updates, "version": expected_version + 1, "updated_at": utcnow()}
     if after in TERMINAL_PHASES:
         values["active_slot"] = None
+        if delivery := updates.get("delivery", mission.delivery):
+            values["delivery"] = {
+                key: value for key, value in delivery.items()
+                if key not in {"order_id", "latitude", "longitude"}
+            }
     result = session.execute(
         update(Mission)
         .where(Mission.id == mission_id, Mission.version == expected_version)
@@ -784,6 +791,114 @@ def record_prava_final_state(
             (f"PRAVA_RESULT_REPORTED_{attempt.status}", {"attempt_id": attempt_id}),
             ("PRAVA_FINAL_FAILED" if declined else "PRAVA_FINAL_COMPLETED", {"attempt_id": attempt_id}),
         ],
+    )
+
+
+def bind_delivery_order(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    order_id: str,
+    latitude: float,
+    longitude: float,
+) -> Mission:
+    payload = {"mission_id": mission_id, "expected_version": expected_version, "order_id": order_id}
+    if existing := _existing_command(session, command_id, "bind_delivery", payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    if mission.phase != Phase.ORDER_CONFIRMED:
+        return _replay_or_conflict(
+            session, command_id, "bind_delivery", payload, mission_id,
+            "delivery tracking requires a confirmed order",
+        )
+    reference = f"…{order_id[-4:]}" if len(order_id) > 4 else "redacted"
+    return _transition(
+        session, mission_id, expected_version, command_id, "bind_delivery", payload,
+        {
+            "delivery": {
+                "order_id": order_id,
+                "order_reference": reference,
+                "latitude": latitude,
+                "longitude": longitude,
+                "status": "TRACKING",
+                "eta_at": None,
+                "dispatch_at": None,
+                "last_checked_at": None,
+                "armed": False,
+                "robot_status": "NOT_STARTED",
+                "alert": None,
+            },
+            "fulfilment_status": "TRACKING_DELIVERY",
+        },
+        [("SWIGGY_ORDER_BOUND", {"order_reference": reference})],
+    )
+
+
+def arm_delivery_dispatch(
+    session: Session, mission_id: str, expected_version: int, command_id: str
+) -> Mission:
+    payload = {"mission_id": mission_id, "expected_version": expected_version}
+    if existing := _existing_command(session, command_id, "arm_dispatch", payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    if mission.phase != Phase.ORDER_CONFIRMED or not mission.delivery:
+        return _replay_or_conflict(
+            session, command_id, "arm_dispatch", payload, mission_id,
+            "dispatch can be armed only for a tracked confirmed order",
+        )
+    return _transition(
+        session, mission_id, expected_version, command_id, "arm_dispatch", payload,
+        {
+            "delivery": {**mission.delivery, "armed": True, "alert": None},
+            "fulfilment_status": "ARMED_FOR_DISPATCH",
+        },
+        [("ROBOT_DISPATCH_ARMED", {})],
+    )
+
+
+def record_robot_dispatched(session: Session, mission: Mission, command_id: str) -> Mission:
+    if mission.phase != Phase.ORDER_CONFIRMED or not mission.delivery or not mission.delivery.get("armed"):
+        raise Conflict("robot dispatch is not armed")
+    return _transition(
+        session, mission.id, mission.version, command_id, "dispatch_robot",
+        {"mission_id": mission.id, "expected_version": mission.version},
+        {
+            "phase": Phase.EN_ROUTE_TO_PICKUP,
+            "delivery": {**mission.delivery, "robot_status": "OUTBOUND", "alert": None},
+            "fulfilment_status": "EN_ROUTE_TO_GATE",
+        },
+        [("ROBOT_DISPATCHED", {})],
+    )
+
+
+def record_robot_progress(session: Session, mission: Mission, robot_status: str) -> Mission:
+    phases = {
+        "AT_PICKUP": (Phase.AT_PICKUP, "AT_GATE", "ROBOT_ARRIVED"),
+        "RETURNING": (Phase.RETURNING, "RETURNING", "ROBOT_RETURNING"),
+        "COMPLETE": (Phase.COMPLETED, "COMPLETED", "ROBOT_COMPLETED"),
+    }
+    if robot_status not in phases or not mission.delivery:
+        return mission
+    phase, fulfilment, event = phases[robot_status]
+    if mission.phase == phase:
+        return mission
+    allowed = {
+        "AT_PICKUP": {Phase.EN_ROUTE_TO_PICKUP},
+        "RETURNING": {Phase.AT_PICKUP, Phase.ITEM_SECURED},
+        "COMPLETE": {Phase.RETURNING},
+    }
+    if mission.phase not in allowed[robot_status]:
+        raise Conflict("robot reported an invalid mission transition")
+    return _transition(
+        session, mission.id, mission.version, f"robot-{mission.id}-{robot_status.lower()}",
+        "robot_progress", {"mission_id": mission.id, "robot_status": robot_status},
+        {
+            "phase": phase,
+            "delivery": {**mission.delivery, "robot_status": robot_status},
+            "fulfilment_status": fulfilment,
+        },
+        [(event, {})],
     )
 
 

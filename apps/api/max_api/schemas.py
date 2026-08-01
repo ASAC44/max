@@ -124,6 +124,12 @@ class RequoteCommand(CommandBase):
     amount_minor: int = Field(ge=1)
 
 
+class BindOrderCommand(CommandBase):
+    order_id: str = Field(min_length=1, max_length=128)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
 class EventView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -174,6 +180,17 @@ class PaymentActionView(BaseModel):
     expires_at: datetime
 
 
+class DeliveryView(BaseModel):
+    order_reference: str | None = None
+    status: str = "NOT_TRACKING"
+    eta_at: datetime | None = None
+    dispatch_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    armed: bool = False
+    robot_status: str = "NOT_STARTED"
+    alert: str | None = None
+
+
 class MissionView(BaseModel):
     id: str
     parent_mission_id: str | None
@@ -198,3 +215,4 @@ class MissionView(BaseModel):
     approval: ApprovalView
     checkout: CheckoutView
     payment_action: PaymentActionView | None = None
+    delivery: DeliveryView | None = None

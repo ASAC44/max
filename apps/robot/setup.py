@@ -16,7 +16,7 @@ setup(
         ("share/max_robot/references", glob("references/*")),
         ("share/max_robot/worlds", glob("worlds/*")),
     ],
-    install_requires=["setuptools", "numpy"],
+    install_requires=["setuptools", "numpy", "gpiozero>=2", "lgpio>=0.2.2.0"],
     zip_safe=True,
     entry_points={
         "console_scripts": [
@@ -25,6 +25,8 @@ setup(
             "max-odom-tf = max_robot.odom_tf_node:main",
             "max-record-reference = max_robot.vision_node:record_reference",
             "max-web = max_robot.cli:main",
+            "max-motors = max_robot.motor_node:main",
+            "max-hardware-check = max_robot.hardware_check:main",
         ]
     },
 )

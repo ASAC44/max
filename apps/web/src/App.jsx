@@ -143,6 +143,14 @@ export default function App() {
     return () => { stopped = true; };
   }, [mission?.id, mission?.phase, mission?.version, token]);
 
+  useEffect(() => {
+    if (!mission?.delivery || !token || !["ORDER_CONFIRMED", "EN_ROUTE_TO_PICKUP", "AT_PICKUP", "ITEM_SECURED", "RETURNING"].includes(mission.phase)) return undefined;
+    const timer = window.setInterval(async () => {
+      try { setMission(await call(`/api/missions/${mission.id}`)); } catch (exception) { setError(exception.message); }
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [mission?.id, mission?.phase, Boolean(mission?.delivery), token]);
+
   const create = () => run(() => call("/api/missions", {
     method: "POST",
     headers: { "Idempotency-Key": newCommand() },
@@ -260,6 +268,8 @@ export default function App() {
               {mission.phase === "PAYMENT_PERMISSION_READY" && !automationFailed && <span>Prava approved; Max is opening Swiggy automatically.</span>}
               {mission.phase === "PAYMENT_PERMISSION_READY" && automationFailed && <button onClick={retryCheckout} disabled={busy}>Retry browser preparation</button>}
               {mission.phase === "PAYMENT_RESULT_REPORT_REQUIRED" && <button onClick={() => command("report-payment-result")} disabled={busy}>Retry Prava result report</button>}
+              {mission.phase === "ORDER_CONFIRMED" && mission.delivery && !mission.delivery.armed && <button onClick={() => command("arm-dispatch")} disabled={busy}>Arm ETA dispatch</button>}
+              {mission.delivery?.armed && mission.phase === "ORDER_CONFIRMED" && <span>Robot armed; waiting for calculated dispatch time.</span>}
               {mission.commerce_status === "QUOTE_EXPIRED" && mission.quote.environment !== "production" && <button onClick={refreshQuote} disabled={busy}>Refresh expired quote</button>}
               {["DRAFT", "NEEDS_CLARIFICATION", "AWAITING_OWNER_APPROVAL", "PAYMENT_APPROVAL_REQUIRED", "PAYMENT_PERMISSION_READY"].includes(mission.phase) && <button className="secondary" onClick={() => command("cancel")} disabled={busy}>Cancel mission</button>}
               {mission.environment === "staged_demo" && ["ORDER_CONFIRMED", "READY_TO_DISPATCH"].includes(mission.phase) && <button className="secondary" onClick={() => command("cancel")} disabled={busy}>Cancel staged mission</button>}
@@ -270,6 +280,18 @@ export default function App() {
               {mission.environment === "staged_demo" && mission.phase === "READY_TO_DISPATCH" && <button onClick={() => command("run-robot")} disabled={busy}>Run labeled robot simulation</button>}
             </div>
           </section>
+
+          {mission.delivery && (
+            <section className="panel">
+              <p className="eyebrow">DELIVERY TRACKING</p>
+              <h3>{mission.delivery.status.replaceAll("_", " ")}</h3>
+              <p>Order {mission.delivery.order_reference || "needs manual binding"}</p>
+              {mission.delivery.eta_at && <p>ETA: {new Date(mission.delivery.eta_at).toLocaleTimeString()}</p>}
+              {mission.delivery.dispatch_at && <p>Robot departure: {new Date(mission.delivery.dispatch_at).toLocaleTimeString()}</p>}
+              <p>Robot: {mission.delivery.robot_status.replaceAll("_", " ")}</p>
+              {mission.delivery.alert && <p role="alert" className="error">{mission.delivery.alert}</p>}
+            </section>
+          )}
 
           <section className="provider-grid">
             {["commerce", "payment", "checkout", "fulfilment", "notification"].map((name) => (

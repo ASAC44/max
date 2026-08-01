@@ -41,6 +41,10 @@ PRAVA_USER_EMAIL=owner@example.com
 PRAVA_CALLBACK_URL=
 SWIGGY_CDP_URL=http://127.0.0.1:9222
 SWIGGY_CARDHOLDER_NAME=Your Name
+MAX_ROBOT_BASE_URL=http://127.0.0.1:8080
+MAX_ROBOT_OPERATOR_PIN=change-me
+MAX_ROBOT_OUTBOUND_SECONDS=30
+MAX_DISPATCH_BUFFER_SECONDS=60
 ```
 
 Swiggy live mode starts the verified Instamart sequence through `mcp-remote`:
@@ -93,6 +97,17 @@ merchant checkout.
 This bridge is implemented and contract-tested, but the live browser selectors
 and full Prava lifecycle remain unobserved on this device. Do not describe the
 flow as live end to end until the Phase 1 manual record reaches the final state.
+
+After a confirmed order, Max binds the active Instamart order, polls
+`track_order` no faster than every 10 seconds, and calculates departure as
+`ETA - MAX_ROBOT_OUTBOUND_SECONDS - MAX_DISPATCH_BUFFER_SECONDS`. The operator
+must arm that mission once in the dashboard. A robot HTTP timeout is
+outcome-unknown and is never retried automatically.
+
+Set `MAX_ROBOT_OUTBOUND_SECONDS` to the measured p95 outbound time for the
+taught route. The API accepts only loopback or private-LAN robot URLs and never
+returns the robot PIN, Swiggy coordinates, full address, or rider data.
+Run one API worker: the demo delivery loop and dispatch lock are process-local.
 
 ## Checks
 

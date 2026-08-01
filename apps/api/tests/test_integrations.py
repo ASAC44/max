@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import httpx
 
 import max_api.integrations as integrations
-from max_api.integrations import IntegrationError, PravaClient, SwiggyBrowserCheckout, SwiggyClient, _tool_arguments
+from max_api.integrations import IntegrationError, PravaClient, SwiggyBrowserCheckout, SwiggyClient, SwiggyOrder, _instant, _tool_arguments
 from max_api.schemas import BudgetMeaning, Environment, Quote, QuoteLine, ShoppingIntent
 
 
@@ -111,6 +111,38 @@ def test_swiggy_quote_clears_and_verifies_an_existing_cart(monkeypatch):
     quote = asyncio.run(SwiggyClient().quote(intent))
     assert quote.amount_minor == 7_200
     assert [name for name, _args in session.calls[:4]] == ["get_addresses", "get_cart", "clear_cart", "get_cart"]
+
+
+def test_swiggy_order_binding_and_absolute_eta(monkeypatch):
+    assert _instant("20") is None
+    quote = Quote(
+        revision=1, merchant="SWIGGY_INSTAMART", product_name="Milk", variant_id="spin-safe",
+        quantity=1, amount_minor=14_700, currency="INR", destination="home",
+        environment=Environment.PRODUCTION, expires_at="2026-08-01T12:15:00Z",
+    )
+    client = SwiggyClient()
+
+    async def read(name, values):
+        if name == "get_orders":
+            assert values["activeOnly"] is True
+            return {"orders": [{
+                "orderId": "order-safe-1234", "totalAmount": "147.00",
+                "deliveryAddress": {"latitude": 12.9716, "longitude": 77.5946},
+                "deliveryPartner": {"latitude": 1, "longitude": 2},
+            }]}
+        assert values == {"orderId": "order-safe-1234", "lat": 12.9716, "lng": 77.5946}
+        return {"data": {"orderStatus": "on_the_way", "etaEpoch": 1785586500000}}
+
+    monkeypatch.setattr(client, "_read_tool", read)
+
+    async def scenario():
+        order = await client.resolve_active_order(quote)
+        assert order == SwiggyOrder("order-safe-1234", 12.9716, 77.5946)
+        tracked = await client.track_order(order)
+        assert tracked.status == "ON_THE_WAY"
+        assert tracked.eta_at.tzinfo is not None
+
+    asyncio.run(scenario())
 
 
 def test_prava_hosted_request_has_https_callback_and_discards_session_token(monkeypatch):
