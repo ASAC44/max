@@ -38,7 +38,9 @@ MAX_PAYMENT_MODE=prava
 PRAVA_SECRET_KEY=sk_test_...
 PRAVA_USER_ID=max-demo-owner
 PRAVA_USER_EMAIL=owner@example.com
-PRAVA_CALLBACK_URL=https://your-public-host/payment-done
+PRAVA_CALLBACK_URL=
+SWIGGY_CDP_URL=http://127.0.0.1:9222
+SWIGGY_CARDHOLDER_NAME=Your Name
 ```
 
 Swiggy live mode starts the verified Instamart sequence through `mcp-remote`:
@@ -47,22 +49,50 @@ quote. The first run opens Swiggy OAuth in the local browser. Raw address/cart
 responses stay in process; only the address label, selected product, variant,
 quantity, total, and fee summary enter mission state.
 
-Prava live mode creates a hosted sandbox session only after exact-quote
-approval. The returned approval URL appears as `payment_action`. Call
-`refresh-payment` after the owner completes hosted verification; the API stores
-only the Prava state, transaction reference, and whether all credential fields
-were present. It never returns or persists the network token, expiry, or
-dynamic CVV.
+Prava live mode creates a hosted sandbox session for the immutable live quote.
+The returned approval URL appears as `payment_action`; approval inside Prava is
+the sole live payment checkpoint. The dashboard polls Prava automatically and
+stores only the state, transaction reference, and whether all credential fields
+were present. It never returns or persists the network token, expiry, or dynamic
+CVV.
 
-Point `PRAVA_CALLBACK_URL` at the public HTTPS form of
-`/api/payments/prava/complete`. The route changes no state; after returning,
-the authenticated operator explicitly calls `refresh-payment`.
+`PRAVA_CALLBACK_URL` is optional. If set, point it at the public HTTPS form of
+`/api/payments/prava/complete`; the landing page tells the owner that Max will
+continue. The dashboard performs the actual status polling in either case.
 
-This is intentionally not a completed Swiggy checkout adapter. The observed
-Swiggy browser cart/card handoff still needs a deterministic credential-entry
-bridge, and the current manual run is blocked by Prava's hosted
-`Verification Unavailable` screen. Until that is cleared, live mode stops safely
-at payment readiness and must not be described as end to end.
+For the final merchant attempt, start a separate Chromium profile before the
+API and log it into the same Swiggy account once:
+
+```bash
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/max-swiggy-browser
+```
+
+Chrome 136+ ignores remote debugging against its default profile, so the
+separate `--user-data-dir` is required. `SWIGGY_CDP_URL` accepts loopback HTTP
+only because this endpoint controls the attached browser.
+
+After Prava approval, the dashboard automatically detects
+`PAYMENT_PERMISSION_READY` and invokes the one-shot checkout. The API then:
+
+1. re-reads the Swiggy MCP cart and checks variant, quantity, and exact total;
+2. fetches the scoped Prava credential into memory only;
+3. opens the Instamart payment page, selects the new-card form when needed,
+   fills the configured cardholder name, confirms the total, and disables card
+   saving;
+4. fills and submits the card form once;
+5. classifies a visible decline or order confirmation; and
+6. reports that confirmed result to Prava and checks its final state.
+
+A browser failure before submission returns the mission to
+`PAYMENT_PERMISSION_READY`; retry with a new command ID after fixing the form.
+Anything ambiguous after the click becomes `CHECKOUT_OUTCOME_UNKNOWN` and is
+never automatically retried. If the merchant result was recorded but Prava
+reporting failed, call `report-payment-result`; that endpoint cannot repeat the
+merchant checkout.
+
+This bridge is implemented and contract-tested, but the live browser selectors
+and full Prava lifecycle remain unobserved on this device. Do not describe the
+flow as live end to end until the Phase 1 manual record reaches the final state.
 
 ## Checks
 

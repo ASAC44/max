@@ -67,15 +67,6 @@ def test_clarification_stops_before_commerce(session):
 
 def test_prava_hosted_flow_stops_before_merchant_checkout(session):
     mission = ready_for_approval(session, "prava-create")
-    mission = approve_quote(
-        session,
-        mission.id,
-        mission.version,
-        "prava-approve",
-        mission.quote_hash,
-        payment_mode="prava",
-    )
-    assert mission.phase == Phase.PAYMENT_APPROVAL_REQUIRED
     mission = record_prava_session(session, mission.id, mission.version, "prava-session", {
         "session_id": "ses_safe",
         "order_id": "ord_safe",
@@ -90,6 +81,12 @@ def test_prava_hosted_flow_stops_before_merchant_checkout(session):
         session, pending.id, pending.version, "prava-ready", "awaiting_result", "tli_safe", True
     )
     assert ready.phase == Phase.PAYMENT_PERMISSION_READY
+    assert ready.approval_quote_hash == ready.quote_hash
+    approval = session.scalar(select(Event).where(
+        Event.mission_id == mission.id,
+        Event.event_type == "OWNER_APPROVED_EXACT_QUOTE",
+    ))
+    assert approval.payload["via"] == "PRAVA"
     event = session.scalar(select(Event).where(
         Event.mission_id == mission.id,
         Event.event_type == "PRAVA_PERMISSION_READY",
@@ -242,6 +239,14 @@ def test_expired_quote_is_recorded_and_cannot_be_approved(session):
     assert refreshed.commerce_status == "SIMULATED_QUOTED"
     approved = approve_quote(session, refreshed.id, refreshed.version, "expired-refreshed-approve", refreshed.quote_hash)
     assert approved.phase == Phase.PAYMENT_PERMISSION_READY
+
+
+def test_live_quote_must_be_recreated_from_merchant(session):
+    mission = ready_for_approval(session, "live-expired-create")
+    mission.quote = {**mission.quote, "environment": "production"}
+    session.commit()
+    with pytest.raises(Conflict, match="live quote must be recreated"):
+        requote(session, mission.id, mission.version, "live-expired-refresh", mission.quote["amount_minor"])
 
 
 def test_provider_result_must_match_attempt(session):

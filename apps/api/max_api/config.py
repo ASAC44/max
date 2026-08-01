@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,4 +48,29 @@ def openai_timeout_seconds() -> float:
         raise RuntimeError("OPENAI_REQUEST_TIMEOUT_SECONDS must be a number") from exc
     if not 0.01 <= value <= 120:
         raise RuntimeError("OPENAI_REQUEST_TIMEOUT_SECONDS must be between 0.01 and 120")
+    return value
+
+
+def swiggy_cdp_url() -> str:
+    value = os.getenv("SWIGGY_CDP_URL", "http://127.0.0.1:9222")
+    parsed = urlparse(value)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise RuntimeError("SWIGGY_CDP_URL must be a loopback HTTP URL")
+    return value
+
+
+def swiggy_cardholder_name() -> str:
+    value = os.getenv("SWIGGY_CARDHOLDER_NAME", "").strip()
+    if not value:
+        raise RuntimeError("SWIGGY_CARDHOLDER_NAME is required for automated Swiggy checkout")
+    return value
+
+
+def checkout_timeout_seconds() -> float:
+    try:
+        value = float(os.getenv("SWIGGY_CHECKOUT_TIMEOUT_SECONDS", "20"))
+    except ValueError as exc:
+        raise RuntimeError("SWIGGY_CHECKOUT_TIMEOUT_SECONDS must be a number") from exc
+    if not 5 <= value <= 60:
+        raise RuntimeError("SWIGGY_CHECKOUT_TIMEOUT_SECONDS must be between 5 and 60")
     return value

@@ -7,10 +7,10 @@ from sqlalchemy.orm import sessionmaker
 
 from max_api.agent import parse_simulated
 from max_api.db import Base, build_engine, get_session
-from max_api.integrations import PravaPaymentState, PravaSession
+from max_api.integrations import PravaCredential, PravaPaymentState, PravaSession
 from max_api.main import app
 from max_api.models import Event, Mission, utcnow
-from max_api.schemas import Environment, Quote, QuoteLine
+from max_api.schemas import Environment, ProviderResult, Quote, QuoteLine
 
 
 async def api_scenario(tmp_path, monkeypatch):
@@ -263,16 +263,40 @@ async def live_api_scenario(tmp_path, monkeypatch):
     async def fake_state(_self, _session_id):
         return PravaPaymentState("awaiting_result", "tli_safe", True)
 
+    async def fake_verify(_self, _quote):
+        return None
+
+    async def fake_credential(_self, _session_id):
+        return PravaCredential("tli_safe", "4111111111111111", "123", "08", "30")
+
+    async def fake_checkout(_self, _quote, credential):
+        assert credential.token == "4111111111111111"
+        return ProviderResult(
+            provider="SWIGGY_BROWSER",
+            operation="merchant_checkout",
+            environment=Environment.PRODUCTION,
+            status="DECLINED",
+            terminal=True,
+        )
+
+    async def fake_report(_self, _session_id, txn_ref_id, status):
+        assert (txn_ref_id, status) == ("tli_safe", "DECLINED")
+        return PravaPaymentState("failed", "tli_safe", False)
+
     monkeypatch.setattr("max_api.main.SwiggyClient.quote", fake_quote)
     monkeypatch.setattr("max_api.main.PravaClient.create_session", fake_session)
     monkeypatch.setattr("max_api.main.PravaClient.payment_state", fake_state)
+    monkeypatch.setattr("max_api.main.SwiggyClient.verify_quote", fake_verify)
+    monkeypatch.setattr("max_api.main.PravaClient.credential", fake_credential)
+    monkeypatch.setattr("max_api.main.SwiggyBrowserCheckout.checkout", fake_checkout)
+    monkeypatch.setattr("max_api.main.PravaClient.report_result", fake_report)
     app.dependency_overrides[get_session] = override_session
     headers = {"Authorization": f"Bearer {token}"}
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             callback = await client.get("/api/payments/prava/complete")
             assert callback.status_code == 200
-            assert "refresh payment status" in callback.text
+            assert "continue automatically" in callback.text
             created = (await client.post(
                 "/api/missions",
                 headers={**headers, "Idempotency-Key": "live-create-001"},
@@ -280,26 +304,28 @@ async def live_api_scenario(tmp_path, monkeypatch):
             )).json()
             assert created["quote"]["merchant"] == "SWIGGY_INSTAMART"
             assert created["quote"]["environment"] == "production"
-            approved = (await client.post(
-                f"/api/missions/{created['id']}/commands/approve",
-                headers=headers,
-                json={
-                    "expected_version": created["version"],
-                    "command_id": "live-approve-001",
-                    "quote_hash": created["quote_hash"],
-                },
-            )).json()
-            assert approved["phase"] == "PAYMENT_APPROVAL_REQUIRED"
-            assert approved["payment_action"]["approval_url"].startswith("https://sandbox.collect.prava.space")
+            assert created["phase"] == "PAYMENT_APPROVAL_REQUIRED"
+            assert created["approval"]["quote_hash"] is None
+            assert created["payment_action"]["approval_url"].startswith("https://sandbox.collect.prava.space")
             refreshed = (await client.post(
                 f"/api/missions/{created['id']}/commands/refresh-payment",
                 headers=headers,
-                json={"expected_version": approved["version"], "command_id": "live-refresh-001"},
+                json={"expected_version": created["version"], "command_id": "live-refresh-001"},
             )).json()
             assert refreshed["phase"] == "PAYMENT_PERMISSION_READY"
+            assert refreshed["approval"]["quote_hash"] == refreshed["quote_hash"]
             serialized = str(refreshed)
             assert "dynamic_cvv" not in serialized
             assert "must-not-be-returned" not in serialized
+            declined = (await client.post(
+                f"/api/missions/{created['id']}/commands/execute-checkout",
+                headers=headers,
+                json={"expected_version": refreshed["version"], "command_id": "live-checkout-001"},
+            )).json()
+            assert declined["phase"] == "PAYMENT_DECLINED"
+            assert declined["checkout_status"] == "DECLINED"
+            assert declined["payment_status"] == "PRAVA_FAILED"
+            assert "4111111111111111" not in str(declined)
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

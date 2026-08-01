@@ -97,6 +97,8 @@ def _event_metadata(
         return "commerce", "SIMULATED_SWIGGY", human, mission_environment
     if event_type == "SWIGGY_QUOTE_CREATED":
         return "commerce", "SWIGGY_INSTAMART_MCP", human, Environment.PRODUCTION
+    if event_type.startswith("SWIGGY_BROWSER_"):
+        return "commerce", "SWIGGY_BROWSER", human, Environment.PRODUCTION
     if event_type == "SIMULATED_CHECKOUT_OUTCOME_UNKNOWN":
         return "commerce", "SIMULATED_SWIGGY", human, Environment.LOCAL
     if event_type == "PACKAGE_READY":
@@ -488,8 +490,8 @@ def record_prava_session(
     if existing := _existing_command(session, command_id, "record_prava_session", payload, mission_id):
         return existing
     mission = _mission(session, mission_id)
-    if mission.phase != Phase.PAYMENT_APPROVAL_REQUIRED:
-        raise Conflict("Prava session requires an approved quote")
+    if mission.phase not in {Phase.AWAITING_OWNER_APPROVAL, Phase.PAYMENT_APPROVAL_REQUIRED}:
+        raise Conflict("Prava session requires a current quote")
     return _transition(
         session,
         mission_id,
@@ -497,7 +499,10 @@ def record_prava_session(
         command_id,
         "record_prava_session",
         payload,
-        {"payment_status": "AWAITING_PRAVA_VERIFICATION"},
+        {
+            "phase": Phase.PAYMENT_APPROVAL_REQUIRED,
+            "payment_status": "AWAITING_PRAVA_VERIFICATION",
+        },
         [("PRAVA_SANDBOX_SESSION_CREATED", action)],
     )
 
@@ -525,14 +530,21 @@ def record_prava_payment_state(
     if state == "awaiting_result":
         if not txn_ref_id or not credential_fields_present:
             raise Conflict("Prava reported ready without the required credential fields")
-        updates = {"phase": Phase.PAYMENT_PERMISSION_READY, "payment_status": "PRAVA_PERMISSION_READY"}
-        event = "PRAVA_PERMISSION_READY"
+        updates = {
+            "phase": Phase.PAYMENT_PERMISSION_READY,
+            "approval_quote_hash": mission.quote_hash,
+            "payment_status": "PRAVA_PERMISSION_READY",
+        }
+        events = []
+        if mission.approval_quote_hash != mission.quote_hash:
+            events.append(("OWNER_APPROVED_EXACT_QUOTE", {"quote_hash": mission.quote_hash, "via": "PRAVA"}))
+        events.append(("PRAVA_PERMISSION_READY", payload))
     elif state == "pending":
         updates = {"payment_status": "AWAITING_PRAVA_VERIFICATION"}
-        event = "PRAVA_VERIFICATION_PENDING"
+        events = [("PRAVA_VERIFICATION_PENDING", payload)]
     elif state == "failed":
         updates = {"phase": Phase.PAYMENT_DECLINED, "payment_status": "PRAVA_FAILED"}
-        event = "PRAVA_VERIFICATION_FAILED"
+        events = [("PRAVA_VERIFICATION_FAILED", payload)]
     else:
         raise Conflict("Prava state is not valid before merchant checkout")
     return _transition(
@@ -543,12 +555,25 @@ def record_prava_payment_state(
         "refresh_prava",
         payload,
         updates,
-        [(event, payload)],
+        events,
     )
 
 
-def start_checkout_attempt(session: Session, mission_id: str, expected_version: int, command_id: str) -> ExternalAttempt:
-    command_payload = {"mission_id": mission_id, "expected_version": expected_version, "operation": "merchant_checkout"}
+def start_checkout_attempt(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    provider: str = "SIMULATED_SWIGGY",
+    environment: Environment = Environment.LOCAL,
+) -> ExternalAttempt:
+    command_payload = {
+        "mission_id": mission_id,
+        "expected_version": expected_version,
+        "operation": "merchant_checkout",
+        "provider": provider,
+        "environment": environment,
+    }
     existing_mission = _existing_command(session, command_id, "start_checkout", command_payload, mission_id)
     existing_attempt = session.scalar(select(ExternalAttempt).where(ExternalAttempt.command_id == command_id))
     if existing_mission and existing_attempt:
@@ -567,9 +592,9 @@ def start_checkout_attempt(session: Session, mission_id: str, expected_version: 
         id=str(uuid4()),
         mission_id=mission_id,
         command_id=command_id,
-        provider="SIMULATED_SWIGGY",
+        provider=provider,
         operation="merchant_checkout",
-        environment=Environment.LOCAL,
+        environment=environment,
         status="IN_PROGRESS",
         terminal=None,
         retry_eligible=False,
@@ -577,8 +602,14 @@ def start_checkout_attempt(session: Session, mission_id: str, expected_version: 
     _transition(
         session, mission_id, expected_version, command_id,
         "start_checkout", command_payload,
-        {"phase": Phase.MERCHANT_CHECKOUT_IN_PROGRESS, "checkout_status": "SIMULATED_IN_PROGRESS"},
-        [("SIMULATED_MERCHANT_CHECKOUT_STARTED", {"attempt_id": attempt.id})],
+        {
+            "phase": Phase.MERCHANT_CHECKOUT_IN_PROGRESS,
+            "checkout_status": "LIVE_IN_PROGRESS" if provider == "SWIGGY_BROWSER" else "SIMULATED_IN_PROGRESS",
+        },
+        [(
+            "SWIGGY_BROWSER_CHECKOUT_STARTED" if provider == "SWIGGY_BROWSER" else "SIMULATED_MERCHANT_CHECKOUT_STARTED",
+            {"attempt_id": attempt.id},
+        )],
         attempt=attempt,
     )
     persisted = session.scalar(select(ExternalAttempt).where(ExternalAttempt.command_id == command_id))
@@ -627,7 +658,7 @@ def finalize_checkout(session: Session, mission_id: str, expected_version: int, 
         Environment(attempt.environment),
     ):
         raise Conflict("provider result does not match the checkout attempt")
-    if (result.status == "DECLINED") != result.terminal:
+    if (result.status in {"APPROVED", "DECLINED"}) != result.terminal:
         raise Conflict("provider result terminal flag is inconsistent with its status")
     if attempt.status != "IN_PROGRESS":
         return _replay_or_conflict(
@@ -642,7 +673,15 @@ def finalize_checkout(session: Session, mission_id: str, expected_version: int, 
     attempt.retry_eligible = result.retry_eligible
     attempt.finished_at = now
 
-    if result.status == "DECLINED":
+    live = attempt.provider == "SWIGGY_BROWSER"
+    if live and result.status in {"APPROVED", "DECLINED"}:
+        updates = {
+            "phase": Phase.PAYMENT_RESULT_REPORT_REQUIRED,
+            "checkout_status": result.status,
+            "payment_status": "PRAVA_RESULT_REPORT_REQUIRED",
+        }
+        events = [(f"SWIGGY_BROWSER_{result.status}", result.model_dump(mode="json"))]
+    elif not live and result.status == "DECLINED":
         updates = {"phase": Phase.PAYMENT_DECLINED, "checkout_status": "DECLINED", "payment_status": "FAILED"}
         events = [
             ("SIMULATED_MERCHANT_DECLINED", result.model_dump(mode="json")),
@@ -651,7 +690,10 @@ def finalize_checkout(session: Session, mission_id: str, expected_version: int, 
         ]
     else:
         updates = {"phase": Phase.CHECKOUT_OUTCOME_UNKNOWN, "checkout_status": "UNKNOWN", "payment_status": "OUTCOME_UNKNOWN"}
-        events = [("SIMULATED_CHECKOUT_OUTCOME_UNKNOWN", result.model_dump(mode="json"))]
+        events = [(
+            "SWIGGY_BROWSER_OUTCOME_UNKNOWN" if live else "SIMULATED_CHECKOUT_OUTCOME_UNKNOWN",
+            result.model_dump(mode="json"),
+        )]
 
     mission = _transition(
         session,
@@ -664,6 +706,83 @@ def finalize_checkout(session: Session, mission_id: str, expected_version: int, 
         events,
     )
     return mission
+
+
+def abort_checkout_attempt(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    attempt_id: str,
+) -> Mission:
+    payload = {"mission_id": mission_id, "expected_version": expected_version, "attempt_id": attempt_id}
+    if existing := _existing_command(session, command_id, "abort_checkout", payload, mission_id):
+        return existing
+    attempt = session.get(ExternalAttempt, attempt_id)
+    if not attempt or attempt.mission_id != mission_id or attempt.provider != "SWIGGY_BROWSER":
+        raise NotFound("live checkout attempt not found")
+    if attempt.status != "IN_PROGRESS":
+        return _replay_or_conflict(
+            session, command_id, "abort_checkout", payload, mission_id, "checkout attempt is already resolved"
+        )
+    attempt.status = "NOT_SUBMITTED"
+    attempt.terminal = True
+    attempt.error_class = "browser_not_ready"
+    attempt.retry_eligible = True
+    attempt.finished_at = utcnow()
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "abort_checkout",
+        payload,
+        {"phase": Phase.PAYMENT_PERMISSION_READY, "checkout_status": "NOT_SUBMITTED"},
+        [("SWIGGY_BROWSER_NOT_SUBMITTED", {"attempt_id": attempt_id})],
+    )
+
+
+def record_prava_final_state(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    attempt_id: str,
+    state: str,
+) -> Mission:
+    payload = {
+        "mission_id": mission_id,
+        "expected_version": expected_version,
+        "attempt_id": attempt_id,
+        "state": state,
+    }
+    if existing := _existing_command(session, command_id, "record_prava_result", payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    attempt = session.get(ExternalAttempt, attempt_id)
+    if mission.phase != Phase.PAYMENT_RESULT_REPORT_REQUIRED or not attempt or attempt.mission_id != mission_id:
+        raise Conflict("mission has no confirmed merchant result awaiting a Prava report")
+    expected = "completed" if attempt.status == "APPROVED" else "failed" if attempt.status == "DECLINED" else None
+    if state != expected:
+        raise Conflict("Prava final state does not match the merchant result")
+    declined = state == "failed"
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "record_prava_result",
+        payload,
+        {
+            "phase": Phase.PAYMENT_DECLINED if declined else Phase.ORDER_CONFIRMED,
+            "payment_status": "PRAVA_FAILED" if declined else "PRAVA_COMPLETED",
+            "checkout_status": "DECLINED" if declined else "ORDER_CONFIRMED",
+        },
+        [
+            (f"PRAVA_RESULT_REPORTED_{attempt.status}", {"attempt_id": attempt_id}),
+            ("PRAVA_FINAL_FAILED" if declined else "PRAVA_FINAL_COMPLETED", {"attempt_id": attempt_id}),
+        ],
+    )
 
 
 def recover_in_progress_attempts(session: Session) -> int:
@@ -695,6 +814,11 @@ def requote(session: Session, mission_id: str, expected_version: int, command_id
         return _replay_or_conflict(
             session, command_id, "requote", command_payload, mission_id,
             "only a pending quote can be revised",
+        )
+    if Quote.model_validate(mission.quote).environment == Environment.PRODUCTION:
+        return _replay_or_conflict(
+            session, command_id, "requote", command_payload, mission_id,
+            "live quote must be recreated from the merchant",
         )
     quote = Quote.model_validate({**mission.quote, "revision": mission.quote["revision"] + 1, "amount_minor": amount_minor, "expires_at": utcnow() + timedelta(minutes=15)})
     hashed = quote_hash(quote)

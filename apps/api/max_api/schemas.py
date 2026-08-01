@@ -19,6 +19,7 @@ class Phase(StrEnum):
     PAYMENT_APPROVAL_REQUIRED = "PAYMENT_APPROVAL_REQUIRED"
     PAYMENT_PERMISSION_READY = "PAYMENT_PERMISSION_READY"
     MERCHANT_CHECKOUT_IN_PROGRESS = "MERCHANT_CHECKOUT_IN_PROGRESS"
+    PAYMENT_RESULT_REPORT_REQUIRED = "PAYMENT_RESULT_REPORT_REQUIRED"
     PAYMENT_DECLINED = "PAYMENT_DECLINED"
     CHECKOUT_OUTCOME_UNKNOWN = "CHECKOUT_OUTCOME_UNKNOWN"
     ORDER_CONFIRMED = "ORDER_CONFIRMED"
@@ -42,8 +43,12 @@ class ShoppingIntent(BaseModel):
     item: str | None = Field(default=None, max_length=200)
     quantity: int | None = Field(default=None, ge=1, le=20)
     budget_meaning: BudgetMeaning | None = None
-    budget_min_minor: int | None = Field(default=None, ge=0)
-    budget_max_minor: int | None = Field(default=None, ge=0)
+    budget_min_minor: int | None = Field(
+        default=None, ge=0, description="Lower budget bound; null when budget_meaning is maximum."
+    )
+    budget_max_minor: int | None = Field(
+        default=None, ge=0, description="Upper budget bound; null when budget_meaning is minimum."
+    )
     currency: Literal["INR"] = "INR"
     destination: str | None = Field(default=None, max_length=100)
 
@@ -87,7 +92,7 @@ class ProviderResult(BaseModel):
     provider: str
     operation: str
     environment: Environment
-    status: Literal["DECLINED", "UNKNOWN", "TIMED_OUT"]
+    status: Literal["APPROVED", "DECLINED", "UNKNOWN", "TIMED_OUT", "NOT_SUBMITTED"]
     terminal: bool
     redacted_reference: str | None = None
     error_class: str | None = None
