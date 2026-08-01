@@ -687,7 +687,8 @@ class SwiggyBrowserCheckout:
                     chose_just_pay = False
                     deadline = asyncio.get_running_loop().time() + checkout_timeout_seconds()
                     while asyncio.get_running_loop().time() < deadline:
-                        current_pages = [page for context in browser.contexts for page in context.pages]
+                        # Only this fresh checkout tab may determine this attempt's result.
+                        current_pages = [page]
                         if not chose_just_pay and (just_pay := await self._just_pay_button(current_pages)):
                             await just_pay.click()
                             chose_just_pay = True

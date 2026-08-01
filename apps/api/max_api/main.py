@@ -34,6 +34,7 @@ from .workflow import (
     approve_quote,
     cancel,
     command_failed,
+    close_unresolved,
     create_mission,
     finalize_checkout,
     missing_fields,
@@ -561,6 +562,11 @@ async def change_quote(mission_id: str, body: RequoteCommand, session: Session =
 @app.post("/api/missions/{mission_id}/commands/cancel", response_model=MissionView, dependencies=[Depends(require_admin)])
 async def cancel_mission(mission_id: str, body: CommandBase, session: Session = Depends(get_session)):
     return mission_view(session, cancel(session, mission_id, body.expected_version, body.command_id))
+
+
+@app.post("/api/missions/{mission_id}/commands/close-unresolved", response_model=MissionView, dependencies=[Depends(require_admin)])
+async def close_unresolved_mission(mission_id: str, body: CommandBase, session: Session = Depends(get_session)):
+    return mission_view(session, close_unresolved(session, mission_id, body.expected_version, body.command_id))
 
 
 @app.post("/api/missions/{mission_id}/commands/start-staged", response_model=MissionView, dependencies=[Depends(require_admin)])

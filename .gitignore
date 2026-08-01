@@ -4,7 +4,6 @@ build/
 install/
 log/
 .pytest_cache/
-docs/snow/
 .env
 *.sqlite3
 .venv/

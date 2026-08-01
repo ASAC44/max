@@ -161,6 +161,29 @@ export default function App() {
       window.prompt("Copy this one-time Prava link without opening it:", url);
     }
   };
+  const clearMission = () => {
+    setMission(null);
+    setError("");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("mission");
+    history.replaceState(null, "", url);
+  };
+  const closeUnresolved = async () => {
+    if (!window.confirm("The merchant outcome is still unknown. Close this mission without claiming it was cancelled?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await call(`/api/missions/${mission.id}/commands/close-unresolved`, {
+        method: "POST",
+        body: JSON.stringify({ expected_version: mission.version, command_id: newCommand() }),
+      });
+      clearMission();
+    } catch (exception) {
+      setError(exception.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const retryCheckout = () => {
     paymentAutomation.current.checkoutStarted = false;
     setAutomationFailed(false);
@@ -240,6 +263,8 @@ export default function App() {
               {mission.commerce_status === "QUOTE_EXPIRED" && mission.quote.environment !== "production" && <button onClick={refreshQuote} disabled={busy}>Refresh expired quote</button>}
               {["DRAFT", "NEEDS_CLARIFICATION", "AWAITING_OWNER_APPROVAL", "PAYMENT_APPROVAL_REQUIRED", "PAYMENT_PERMISSION_READY"].includes(mission.phase) && <button className="secondary" onClick={() => command("cancel")} disabled={busy}>Cancel mission</button>}
               {mission.environment === "staged_demo" && ["ORDER_CONFIRMED", "READY_TO_DISPATCH"].includes(mission.phase) && <button className="secondary" onClick={() => command("cancel")} disabled={busy}>Cancel staged mission</button>}
+              {mission.phase === "CHECKOUT_OUTCOME_UNKNOWN" && <button className="secondary" onClick={closeUnresolved} disabled={busy}>Close unresolved mission</button>}
+              {["PAYMENT_DECLINED", "COMPLETED", "CANCELLED", "CLOSED_UNRESOLVED"].includes(mission.phase) && <button className="secondary" onClick={clearMission} disabled={busy}>Start new mission</button>}
               {mission.phase === "PAYMENT_DECLINED" && <button onClick={() => command("start-staged")} disabled={busy}>Create separate staged fulfilment</button>}
               {mission.environment === "staged_demo" && mission.phase === "ORDER_CONFIRMED" && <button onClick={() => command("package-ready")} disabled={busy}>Record PACKAGE_READY</button>}
               {mission.environment === "staged_demo" && mission.phase === "READY_TO_DISPATCH" && <button onClick={() => command("run-robot")} disabled={busy}>Run labeled robot simulation</button>}
