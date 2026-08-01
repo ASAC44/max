@@ -18,6 +18,7 @@ from max_api.workflow import (
     approve_quote,
     bind_delivery_order,
     cancel,
+    close_unresolved,
     create_mission,
     finalize_checkout,
     package_ready,
@@ -189,6 +190,17 @@ def test_unknown_checkout_is_not_retryable(session):
     )
     with pytest.raises(Conflict, match="another mission is active"):
         create_mission(session, "get juice", "unknown-new-root", "simulated")
+    closed = close_unresolved(session, mission.id, mission.version, "close-unknown")
+    assert closed.phase == Phase.CLOSED_UNRESOLVED
+    assert closed.active_slot is None
+    assert closed.checkout_status == "UNKNOWN"
+    assert closed.payment_status == "OUTCOME_UNKNOWN"
+    event = session.scalar(select(Event).where(
+        Event.mission_id == mission.id,
+        Event.event_type == "MISSION_CLOSED_UNRESOLVED",
+    ))
+    assert event.human_intervened is True
+    assert create_mission(session, "get juice", "after-unknown", "simulated").active_slot == "active"
 
 
 def test_restart_recovers_in_progress_attempt_as_unknown(session):

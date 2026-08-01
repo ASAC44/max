@@ -22,4 +22,6 @@ npm run build
 ```
 
 This is one page using React, native fetch, and CSS. There is no router, client
-state store, component library, WebSocket, or frontend workflow engine.
+state store, component library, or WebSocket. A bounded page effect polls Prava
+and invokes the approved checkout while Mission Control remains open; the API
+still owns every authoritative workflow transition.

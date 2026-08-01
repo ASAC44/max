@@ -56,6 +56,7 @@ from .workflow import (
     bind_delivery_order,
     cancel,
     command_failed,
+    close_unresolved,
     create_mission,
     finalize_checkout,
     missing_fields,
@@ -775,6 +776,11 @@ async def arm_dispatch(mission_id: str, body: CommandBase, session: Session = De
         session,
         arm_delivery_dispatch(session, mission_id, body.expected_version, body.command_id),
     )
+
+
+@app.post("/api/missions/{mission_id}/commands/close-unresolved", response_model=MissionView, dependencies=[Depends(require_admin)])
+async def close_unresolved_mission(mission_id: str, body: CommandBase, session: Session = Depends(get_session)):
+    return mission_view(session, close_unresolved(session, mission_id, body.expected_version, body.command_id))
 
 
 @app.post("/api/missions/{mission_id}/commands/start-staged", response_model=MissionView, dependencies=[Depends(require_admin)])

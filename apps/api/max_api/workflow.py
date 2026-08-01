@@ -25,6 +25,7 @@ class Conflict(WorkflowError):
 
 TERMINAL_PHASES = {
     Phase.PAYMENT_DECLINED,
+    Phase.CLOSED_UNRESOLVED,
     Phase.COMPLETED,
     Phase.CANCELLED,
 }
@@ -85,6 +86,7 @@ def _event_metadata(
     human = command_scope in {"reply", "requote"} or event_type in {
         "OWNER_APPROVED_EXACT_QUOTE",
         "MISSION_CANCELLED",
+        "MISSION_CLOSED_UNRESOLVED",
         "PACKAGE_READY",
         "ROBOT_DISPATCH_ARMED",
     }
@@ -982,6 +984,28 @@ def cancel(session: Session, mission_id: str, expected_version: int, command_id:
         command_payload,
         updates,
         [("MISSION_CANCELLED", {})],
+    )
+
+
+def close_unresolved(session: Session, mission_id: str, expected_version: int, command_id: str) -> Mission:
+    command_payload = {"mission_id": mission_id, "expected_version": expected_version}
+    if existing := _existing_command(session, command_id, "close_unresolved", command_payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    if mission.phase != Phase.CHECKOUT_OUTCOME_UNKNOWN:
+        return _replay_or_conflict(
+            session, command_id, "close_unresolved", command_payload, mission_id,
+            "only a checkout with an unknown outcome can be closed unresolved",
+        )
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "close_unresolved",
+        command_payload,
+        {"phase": Phase.CLOSED_UNRESOLVED},
+        [("MISSION_CLOSED_UNRESOLVED", {"payment_status": mission.payment_status})],
     )
 
 
