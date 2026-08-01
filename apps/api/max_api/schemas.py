@@ -1,0 +1,176 @@
+from datetime import datetime
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class Environment(StrEnum):
+    LOCAL = "local"
+    SANDBOX = "sandbox"
+    STAGED = "staged_demo"
+    PRODUCTION = "production"
+
+
+class Phase(StrEnum):
+    DRAFT = "DRAFT"
+    NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
+    AWAITING_OWNER_APPROVAL = "AWAITING_OWNER_APPROVAL"
+    PAYMENT_PERMISSION_READY = "PAYMENT_PERMISSION_READY"
+    MERCHANT_CHECKOUT_IN_PROGRESS = "MERCHANT_CHECKOUT_IN_PROGRESS"
+    PAYMENT_DECLINED = "PAYMENT_DECLINED"
+    CHECKOUT_OUTCOME_UNKNOWN = "CHECKOUT_OUTCOME_UNKNOWN"
+    ORDER_CONFIRMED = "ORDER_CONFIRMED"
+    READY_TO_DISPATCH = "READY_TO_DISPATCH"
+    EN_ROUTE_TO_PICKUP = "EN_ROUTE_TO_PICKUP"
+    AT_PICKUP = "AT_PICKUP"
+    ITEM_SECURED = "ITEM_SECURED"
+    RETURNING = "RETURNING"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class BudgetMeaning(StrEnum):
+    EXACT = "exact"
+    MAXIMUM = "maximum"
+    MINIMUM = "minimum"
+    RANGE = "range"
+
+
+class ShoppingIntent(BaseModel):
+    item: str | None = Field(default=None, max_length=200)
+    quantity: int | None = Field(default=None, ge=1, le=20)
+    budget_meaning: BudgetMeaning | None = None
+    budget_min_minor: int | None = Field(default=None, ge=0)
+    budget_max_minor: int | None = Field(default=None, ge=0)
+    currency: Literal["INR"] = "INR"
+    destination: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_budget_shape(self):
+        low, high = self.budget_min_minor, self.budget_max_minor
+        if self.budget_meaning is None and (low is not None or high is not None):
+            raise ValueError("budget bounds require a budget meaning")
+        if self.budget_meaning == BudgetMeaning.EXACT and (low is None or high is None or low != high):
+            raise ValueError("exact budget requires equal minimum and maximum")
+        if self.budget_meaning == BudgetMeaning.MAXIMUM and (low is not None or high is None):
+            raise ValueError("maximum budget requires only a maximum")
+        if self.budget_meaning == BudgetMeaning.MINIMUM and (low is None or high is not None):
+            raise ValueError("minimum budget requires only a minimum")
+        if self.budget_meaning == BudgetMeaning.RANGE and (low is None or high is None or low > high):
+            raise ValueError("range budget requires an ordered minimum and maximum")
+        return self
+
+
+class Quote(BaseModel):
+    revision: int = Field(ge=1)
+    merchant: str
+    product_name: str
+    variant_id: str
+    quantity: int = Field(ge=1)
+    amount_minor: int = Field(ge=0)
+    currency: str = Field(pattern="^[A-Z]{3}$")
+    destination: str
+    environment: Environment
+    expires_at: datetime
+
+
+class ProviderResult(BaseModel):
+    provider: str
+    operation: str
+    environment: Environment
+    status: Literal["DECLINED", "UNKNOWN", "TIMED_OUT"]
+    terminal: bool
+    redacted_reference: str | None = None
+    error_class: str | None = None
+    retry_eligible: bool = False
+
+
+class MissionCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class MissionReply(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+    expected_version: int = Field(ge=0)
+    command_id: str = Field(min_length=8, max_length=48)
+
+
+class CommandBase(BaseModel):
+    expected_version: int = Field(ge=0)
+    command_id: str = Field(min_length=8, max_length=48)
+
+
+class ApproveCommand(CommandBase):
+    quote_hash: str = Field(min_length=64, max_length=64)
+    simulated_outcome: str = Field(default="decline", pattern="^(decline|unknown|timeout)$")
+
+
+class RequoteCommand(CommandBase):
+    amount_minor: int = Field(ge=1)
+
+
+class EventView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    sequence: int
+    event_type: str
+    component: str
+    provider: str | None
+    human_intervened: bool
+    environment: str
+    phase_before: str
+    phase_after: str
+    payload: dict
+    created_at: datetime
+
+
+class AttemptView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    provider: str
+    operation: str
+    environment: str
+    status: str
+    terminal: bool | None
+    redacted_reference: str | None
+    error_class: str | None
+    retry_eligible: bool
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class ApprovalView(BaseModel):
+    status: str
+    quote_hash: str | None
+
+
+class CheckoutView(BaseModel):
+    status: str
+    latest_attempt: AttemptView | None
+
+
+class MissionView(BaseModel):
+    id: str
+    parent_mission_id: str | None
+    version: int
+    phase: str
+    environment: str
+    agent_mode: str
+    request_text: str
+    intent: ShoppingIntent | None
+    clarification_question: str | None
+    quote: Quote | None
+    quote_hash: str | None
+    commerce_status: str
+    payment_status: str
+    checkout_status: str
+    fulfilment_status: str
+    notification_status: str
+    created_at: datetime
+    updated_at: datetime
+    events: list[EventView]
+    attempts: list[AttemptView]
+    approval: ApprovalView
+    checkout: CheckoutView

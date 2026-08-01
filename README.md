@@ -41,6 +41,16 @@ courier.
 
 Built for the [Agentic Commerce Hackathon](https://agentic-commerce.devfolio.co/overview).
 
+## Engineering the agent
+
+Max keeps language understanding separate from authority. Its typed OpenAI
+interpretation path is configured but still pending live-model validation; a
+deterministic, persisted mission workflow owns approval, payment, checkout, and
+dispatch gates. The operator dashboard renders that same event history instead
+of inventing a second version of mission state.
+
+[Explore the agent API →](apps/api/README.md) · [Explore mission control →](apps/web/README.md)
+
 ## Engineering the body
 
 Max's navigation prototype combines ROS 2, Gazebo, RTAB-Map visual SLAM,
@@ -55,10 +65,10 @@ without hiding safety stops or human intervention.
 ```text
 apps/
 ├── api/    # Max agent, mission workflow, persistence, integrations
-│   ├── src/
+│   ├── max_api/
+│   ├── migrations/
 │   └── tests/
 ├── web/    # admin dashboard
-│   ├── public/
 │   └── src/
 └── robot/  # navigation team's ROS 2 package, simulation, and tests
 docs/       # shared project documentation
