@@ -1,0 +1,14 @@
+[Unit]
+Description=Prava temporary HTTPS video tunnel
+After=prava-video.service
+Requires=prava-video.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/.local/bin/prava-stream-tunnel
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Prava MAX98357A persistent speaker volume
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 3
+ExecStart=/usr/bin/wpctl set-volume --limit 2.0 @DEFAULT_AUDIO_SINK@ 2.0
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

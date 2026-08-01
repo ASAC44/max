@@ -1,0 +1,12 @@
+[Unit]
+Description=Prava 1080p30 Raspberry Pi camera stream
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mediamtx /home/pi/.config/prava/mediamtx.yml
+Restart=always
+RestartSec=3
+Environment=MTX_CONFKEYSENV=none
+
+[Install]
+WantedBy=default.target

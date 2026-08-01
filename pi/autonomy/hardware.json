@@ -1,0 +1,11 @@
+{
+  "mpu6050_wired": true,
+  "wheel_encoders_installed": false,
+  "physical_estop_installed": false,
+  "depth_or_lidar_installed": false,
+  "active_cooling_installed": false,
+  "gps_route_recorded": false,
+  "camera_obstruction_validated": false,
+  "route_replay_shadow_validated": false,
+  "remote_supervisor_ready": false
+}

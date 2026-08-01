@@ -1,0 +1,34 @@
+logLevel: info
+
+api: false
+metrics: false
+pprof: false
+playback: false
+rtsp: false
+rtmp: false
+webrtc: false
+srt: false
+
+hls: true
+hlsAddress: 127.0.0.1:8888
+hlsAllowOrigins: ["*"]
+hlsAlwaysRemux: true
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsMuxerCloseAfter: 60s
+
+paths:
+  cam:
+    source: rpiCamera
+    rpiCameraCamID: 0
+    rpiCameraWidth: 1920
+    rpiCameraHeight: 1080
+    rpiCameraFPS: 30
+    rpiCameraAfMode: continuous
+    rpiCameraCodec: auto
+    rpiCameraIDRPeriod: 30
+    rpiCameraBitrate: 5000000
+    rpiCameraH264Profile: auto
+    rpiCameraH264Level: "4.1"

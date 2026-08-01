@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly DRIVE_SERVICE="prava-drive.service"
+readonly GPS_SERVICE="prava-telemetry.service"
+readonly VOLUME_SERVICE="prava-volume.service"
+readonly VIDEO_SERVICE="prava-video.service"
+readonly TUNNEL_SERVICE="prava-stream-tunnel.service"
+
+service_state() {
+  systemctl --user is-active "$1" 2>/dev/null || true
+}
+
+show_status() {
+  local keyboard="not detected"
+  local device
+
+  for device in /dev/input/by-id/*-event-kbd; do
+    if [[ -e "$device" ]]; then
+      keyboard="$device"
+      break
+    fi
+  done
+
+  echo "Prava service status"
+  echo "  Keyboard controller: $(service_state "$DRIVE_SERVICE")"
+  echo "  GPS telemetry:       $(service_state "$GPS_SERVICE")"
+  echo "  Speaker volume:      $(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || echo unavailable)"
+  echo "  Keyboard:            $keyboard"
+  echo "  GPS UART:            $([[ -e /dev/ttyAMA0 ]] && echo /dev/ttyAMA0 || echo unavailable)"
+  echo "  Camera encoder:      $(service_state "$VIDEO_SERVICE")"
+  echo "  Public video tunnel: $(service_state "$TUNNEL_SERVICE")"
+  echo
+  echo "Latest GPS telemetry messages:"
+  systemctl --user --no-pager --full status "$GPS_SERVICE" 2>/dev/null \
+    | tail -n 8 || true
+}
+
+start_all() {
+  systemctl --user daemon-reload
+  systemctl --user stop "$TUNNEL_SERVICE" "$VIDEO_SERVICE"
+  systemctl --user start "$VOLUME_SERVICE" "$GPS_SERVICE" "$DRIVE_SERVICE"
+  wpctl set-volume --limit 2.0 @DEFAULT_AUDIO_SINK@ 2.0
+  sleep 1
+  show_status
+
+  if [[ "$(service_state "$DRIVE_SERVICE")" != "active" ]]; then
+    echo "Keyboard controller failed to start." >&2
+    exit 1
+  fi
+  if [[ "$(service_state "$GPS_SERVICE")" != "active" ]]; then
+    echo "GPS telemetry failed to start." >&2
+    exit 1
+  fi
+}
+
+stop_all() {
+  systemctl --user stop \
+    "$DRIVE_SERVICE" \
+    "$GPS_SERVICE" \
+    "$TUNNEL_SERVICE" \
+    "$VIDEO_SERVICE"
+  show_status
+}
+
+case "${1:-start}" in
+  start)
+    start_all
+    ;;
+  restart)
+    stop_all
+    start_all
+    ;;
+  stop)
+    stop_all
+    ;;
+  status)
+    show_status
+    ;;
+  *)
+    echo "Usage: prava-control [start|restart|status|stop]" >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "bus": 1,
+  "address": "0x68",
+  "gyro_bias_dps": [
+    20.9544,
+    19.8173,
+    -0.7397
+  ],
+  "gyro_stdev_dps": [
+    0.0993,
+    0.1125,
+    0.1312
+  ],
+  "samples": 400,
+  "sample_interval_seconds": 0.01,
+  "assumption": "Robot stationary during calibration"
+}

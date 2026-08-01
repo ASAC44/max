@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "coordinate-1-to-coordinate-2",
+  "points": [
+    {
+      "latitude": 28.717943333333334,
+      "longitude": 77.06161333333333,
+      "label": "live-start"
+    },
+    {
+      "latitude": 28.71788288888889,
+      "longitude": 77.06159922222222,
+      "label": "segment-1"
+    },
+    {
+      "latitude": 28.717822444444445,
+      "longitude": 77.06158511111111,
+      "label": "segment-2"
+    },
+    {
+      "latitude": 28.717762,
+      "longitude": 77.061571,
+      "label": "destination"
+    }
+  ]
+}

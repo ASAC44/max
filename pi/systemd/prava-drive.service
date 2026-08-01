@@ -1,0 +1,12 @@
+[Unit]
+Description=Prava WASD motor and horn controller
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/.local/bin/prava-drive-controller --speed 0.30
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

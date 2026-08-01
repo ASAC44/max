@@ -1,0 +1,12 @@
+[Unit]
+Description=Prava GPS telemetry uploader
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/.local/bin/prava-telemetry-uploader --endpoint https://prava-ashen.vercel.app --interval 3 --stream-url-file /home/pi/.local/state/prava/stream-url
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
