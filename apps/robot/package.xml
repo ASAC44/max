@@ -2,7 +2,7 @@
 <package format="3">
   <name>max_robot</name>
   <version>0.1.0</version>
-  <description>Navigation, simulation, and test checkout services for Max.</description>
+  <description>VSLAM, obstruction stopping, route control, and simulator assets for Max.</description>
   <maintainer email="maintainers@example.com">Max maintainers</maintainer>
   <license>MIT</license>
 

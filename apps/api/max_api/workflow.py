@@ -95,11 +95,15 @@ def _event_metadata(
         return "agent", provider, human, mission_environment
     if event_type in {"SIMULATED_QUOTE_CREATED", "QUOTE_CHANGED_APPROVAL_INVALIDATED", "QUOTE_EXPIRED"}:
         return "commerce", "SIMULATED_SWIGGY", human, mission_environment
+    if event_type == "SWIGGY_QUOTE_CREATED":
+        return "commerce", "SWIGGY_INSTAMART_MCP", human, Environment.PRODUCTION
     if event_type == "SIMULATED_CHECKOUT_OUTCOME_UNKNOWN":
         return "commerce", "SIMULATED_SWIGGY", human, Environment.LOCAL
     if event_type == "PACKAGE_READY":
         return "fulfilment", "OPERATOR", True, mission_environment
     if "PRAVA" in event_type:
+        if not event_type.startswith("SIMULATED_"):
+            return "payment", "PRAVA", human, Environment.SANDBOX
         return "payment", "SIMULATED_PRAVA", human, Environment.LOCAL
     if "MERCHANT" in event_type or event_type == "SIMULATED_ORDER_CONFIRMED":
         environment = Environment.STAGED if event_type == "SIMULATED_ORDER_CONFIRMED" else Environment.LOCAL
@@ -341,6 +345,7 @@ def apply_intent(
     request_text: str | None = None,
     command_scope: str = "apply_intent",
     command_payload: dict | None = None,
+    resolved_quote: Quote | None = None,
 ) -> Mission:
     command_payload = command_payload or {
         "intent": intent.model_dump(mode="json"),
@@ -368,19 +373,20 @@ def apply_intent(
             [("CLARIFICATION_REQUIRED", {"missing_fields": missing, "question": question})],
         )
 
-    quote = Quote(
-        revision=(mission.quote or {}).get("revision", 0) + 1,
-        merchant="SIMULATED_SWIGGY_INSTAMART",
-        product_name=intent.item or "",
-        variant_id=f"sim-{hashlib.sha256((intent.item or '').encode()).hexdigest()[:10]}",
-        quantity=intent.quantity or 1,
-        amount_minor=_quote_amount(intent),
-        currency=intent.currency,
-        destination=intent.destination or "",
-        environment=Environment.LOCAL,
-        expires_at=utcnow() + timedelta(minutes=15),
-    )
+    quote = resolved_quote or Quote(
+            revision=(mission.quote or {}).get("revision", 0) + 1,
+            merchant="SIMULATED_SWIGGY_INSTAMART",
+            product_name=intent.item or "",
+            variant_id=f"sim-{hashlib.sha256((intent.item or '').encode()).hexdigest()[:10]}",
+            quantity=intent.quantity or 1,
+            amount_minor=_quote_amount(intent),
+            currency=intent.currency,
+            destination=intent.destination or "",
+            environment=Environment.LOCAL,
+            expires_at=utcnow() + timedelta(minutes=15),
+        )
     hashed = quote_hash(quote)
+    live = resolved_quote is not None
     return _transition(
         session, mission_id, expected_version, command_id,
         command_scope, command_payload,
@@ -391,11 +397,14 @@ def apply_intent(
             "quote": quote.model_dump(mode="json"),
             "quote_hash": hashed,
             "approval_quote_hash": None,
-            "commerce_status": "SIMULATED_QUOTED",
+            "commerce_status": "LIVE_QUOTED" if live else "SIMULATED_QUOTED",
         },
         [
             ("INTENT_VALIDATED", {"budget_meaning": intent.budget_meaning, "currency": intent.currency}),
-            ("SIMULATED_QUOTE_CREATED", {"quote_hash": hashed, "amount_minor": quote.amount_minor, "currency": quote.currency}),
+            (
+                "SWIGGY_QUOTE_CREATED" if live else "SIMULATED_QUOTE_CREATED",
+                {"quote_hash": hashed, "amount_minor": quote.amount_minor, "currency": quote.currency},
+            ),
         ],
     )
 
@@ -431,12 +440,14 @@ def approve_quote(
     command_id: str,
     approved_hash: str,
     checkout_outcome: str | None = None,
+    payment_mode: str = "simulated",
 ) -> Mission:
     command_payload = {
         "mission_id": mission_id,
         "expected_version": expected_version,
         "quote_hash": approved_hash,
         "checkout_outcome": checkout_outcome,
+        "payment_mode": payment_mode,
     }
     if existing := _existing_command(session, command_id, "approve_quote", command_payload, mission_id):
         return existing
@@ -451,18 +462,88 @@ def approve_quote(
     if _quote_expired(mission):
         _record_quote_expired(session, mission, expected_version, command_id)
         raise Conflict("quote expired; request a fresh quote")
+    live = payment_mode == "prava"
     return _transition(
         session, mission_id, expected_version, command_id,
         "approve_quote", command_payload,
         {
-            "phase": Phase.PAYMENT_PERMISSION_READY,
+            "phase": Phase.PAYMENT_APPROVAL_REQUIRED if live else Phase.PAYMENT_PERMISSION_READY,
             "approval_quote_hash": approved_hash,
-            "payment_status": "SIMULATED_PERMISSION_READY",
+            "payment_status": "PRAVA_SESSION_REQUIRED" if live else "SIMULATED_PERMISSION_READY",
         },
-        [
-            ("OWNER_APPROVED_EXACT_QUOTE", {"quote_hash": approved_hash}),
+        [("OWNER_APPROVED_EXACT_QUOTE", {"quote_hash": approved_hash})] + ([] if live else [
             ("SIMULATED_PRAVA_PERMISSION_READY", {"quote_hash": approved_hash, "environment": Environment.LOCAL}),
-        ],
+        ]),
+    )
+
+
+def record_prava_session(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    action: dict,
+) -> Mission:
+    payload = {"mission_id": mission_id, **action}
+    if existing := _existing_command(session, command_id, "record_prava_session", payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    if mission.phase != Phase.PAYMENT_APPROVAL_REQUIRED:
+        raise Conflict("Prava session requires an approved quote")
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "record_prava_session",
+        payload,
+        {"payment_status": "AWAITING_PRAVA_VERIFICATION"},
+        [("PRAVA_SANDBOX_SESSION_CREATED", action)],
+    )
+
+
+def record_prava_payment_state(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    state: str,
+    txn_ref_id: str | None,
+    credential_fields_present: bool,
+) -> Mission:
+    payload = {
+        "mission_id": mission_id,
+        "state": state,
+        "txn_ref_id": txn_ref_id,
+        "credential_fields_present": credential_fields_present,
+    }
+    if existing := _existing_command(session, command_id, "refresh_prava", payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    if mission.phase != Phase.PAYMENT_APPROVAL_REQUIRED:
+        raise Conflict("mission is not awaiting Prava verification")
+    if state == "awaiting_result":
+        if not txn_ref_id or not credential_fields_present:
+            raise Conflict("Prava reported ready without the required credential fields")
+        updates = {"phase": Phase.PAYMENT_PERMISSION_READY, "payment_status": "PRAVA_PERMISSION_READY"}
+        event = "PRAVA_PERMISSION_READY"
+    elif state == "pending":
+        updates = {"payment_status": "AWAITING_PRAVA_VERIFICATION"}
+        event = "PRAVA_VERIFICATION_PENDING"
+    elif state == "failed":
+        updates = {"phase": Phase.PAYMENT_DECLINED, "payment_status": "PRAVA_FAILED"}
+        event = "PRAVA_VERIFICATION_FAILED"
+    else:
+        raise Conflict("Prava state is not valid before merchant checkout")
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "refresh_prava",
+        payload,
+        updates,
+        [(event, payload)],
     )
 
 
@@ -641,6 +722,7 @@ def cancel(session: Session, mission_id: str, expected_version: int, command_id:
         Phase.DRAFT,
         Phase.NEEDS_CLARIFICATION,
         Phase.AWAITING_OWNER_APPROVAL,
+        Phase.PAYMENT_APPROVAL_REQUIRED,
         Phase.PAYMENT_PERMISSION_READY,
         Phase.ORDER_CONFIRMED,
         Phase.READY_TO_DISPATCH,

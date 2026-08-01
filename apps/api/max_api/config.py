@@ -15,6 +15,20 @@ def agent_mode() -> str:
     return mode
 
 
+def commerce_mode() -> str:
+    mode = os.getenv("MAX_COMMERCE_MODE", "simulated")
+    if mode not in {"simulated", "swiggy"}:
+        raise RuntimeError("MAX_COMMERCE_MODE must be 'simulated' or 'swiggy'")
+    return mode
+
+
+def payment_mode() -> str:
+    mode = os.getenv("MAX_PAYMENT_MODE", "simulated")
+    if mode not in {"simulated", "prava"}:
+        raise RuntimeError("MAX_PAYMENT_MODE must be 'simulated' or 'prava'")
+    return mode
+
+
 def web_origin() -> str:
     return os.getenv("MAX_WEB_ORIGIN", "http://127.0.0.1:5173")
 

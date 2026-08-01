@@ -3,13 +3,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .agent import parse_request
-from .config import admin_token, agent_mode, web_origin
+from .config import admin_token, agent_mode, commerce_mode, payment_mode, web_origin
 from .db import SessionLocal, get_session
+from .integrations import IntegrationError, PravaClient, SwiggyClient
 from .models import Event, ExternalAttempt, Mission
 from .schemas import (
     ApprovalView,
@@ -20,6 +22,8 @@ from .schemas import (
     MissionCreate,
     MissionReply,
     MissionView,
+    PaymentActionView,
+    Quote,
     RequoteCommand,
 )
 from .workflow import (
@@ -30,9 +34,12 @@ from .workflow import (
     command_failed,
     create_mission,
     finalize_checkout,
+    missing_fields,
     package_ready,
     preflight_command,
     record_agent_failure,
+    record_prava_payment_state,
+    record_prava_session,
     recover_in_progress_attempts,
     requote,
     run_robot_simulation,
@@ -63,6 +70,15 @@ def mission_view(session: Session, mission: Mission) -> MissionView:
     events = session.scalars(select(Event).where(Event.mission_id == mission.id).order_by(Event.sequence)).all()
     attempts = session.scalars(select(ExternalAttempt).where(ExternalAttempt.mission_id == mission.id).order_by(ExternalAttempt.started_at)).all()
     attempt_views = [AttemptView.model_validate(attempt) for attempt in attempts]
+    payment_action = None
+    for event in reversed(events):
+        if event.event_type == "PRAVA_SANDBOX_SESSION_CREATED":
+            payment_action = PaymentActionView(
+                provider="PRAVA",
+                environment="sandbox",
+                **event.payload,
+            )
+            break
     return MissionView(
         id=mission.id,
         parent_mission_id=mission.parent_mission_id,
@@ -86,6 +102,7 @@ def mission_view(session: Session, mission: Mission) -> MissionView:
         attempts=attempt_views,
         approval=ApprovalView(status=mission.payment_status, quote_hash=mission.approval_quote_hash),
         checkout=CheckoutView(status=mission.checkout_status, latest_attempt=attempt_views[-1] if attempt_views else None),
+        payment_action=payment_action,
     )
 
 
@@ -114,7 +131,18 @@ async def workflow_error_handler(_request, exc: WorkflowError):
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "agent_mode": agent_mode(), "environment": "local"}
+    return {
+        "status": "ok",
+        "agent_mode": agent_mode(),
+        "commerce_mode": commerce_mode(),
+        "payment_mode": payment_mode(),
+        "environment": "local",
+    }
+
+
+@app.get("/api/payments/prava/complete", response_class=HTMLResponse)
+async def prava_complete() -> str:
+    return "<h1>Prava verification returned</h1><p>You can close this page and refresh payment status in Max.</p>"
 
 
 @app.post("/api/missions", response_model=MissionView, dependencies=[Depends(require_admin)])
@@ -157,6 +185,15 @@ async def create(
             type(exc).__name__,
         )
         raise interpretation_error(failed.id) from exc
+    resolved_quote = None
+    if commerce_mode() == "swiggy" and not missing_fields(intent):
+        try:
+            resolved_quote = await SwiggyClient().quote(intent)
+        except IntegrationError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"message": str(exc), "mission_id": mission.id},
+            ) from exc
     mission = apply_intent(
         session,
         mission.id,
@@ -165,6 +202,7 @@ async def create(
         intent,
         command_scope="initial_parse",
         command_payload=parse_payload,
+        resolved_quote=resolved_quote,
     )
     return mission_view(session, mission)
 
@@ -209,6 +247,15 @@ async def reply(mission_id: str, body: MissionReply, session: Session = Depends(
             type(exc).__name__,
         )
         raise interpretation_error(failed.id) from exc
+    resolved_quote = None
+    if commerce_mode() == "swiggy" and not missing_fields(intent):
+        try:
+            resolved_quote = await SwiggyClient().quote(intent)
+        except IntegrationError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"message": str(exc), "mission_id": mission.id},
+            ) from exc
     mission = apply_intent(
         session,
         mission_id,
@@ -218,12 +265,24 @@ async def reply(mission_id: str, body: MissionReply, session: Session = Depends(
         combined,
         command_scope="reply",
         command_payload=command_payload,
+        resolved_quote=resolved_quote,
     )
     return mission_view(session, mission)
 
 
 @app.post("/api/missions/{mission_id}/commands/approve", response_model=MissionView, dependencies=[Depends(require_admin)])
 async def approve(mission_id: str, body: ApproveCommand, session: Session = Depends(get_session)):
+    mode = payment_mode()
+    current = session.get(Mission, mission_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="mission not found")
+    current_quote = Quote.model_validate(current.quote) if current.quote else None
+    if mode == "prava" and (
+        not current_quote
+        or current_quote.merchant != "SWIGGY_INSTAMART"
+        or current_quote.environment != "production"
+    ):
+        raise HTTPException(status_code=409, detail="live Prava requires a live Swiggy quote")
     mission = approve_quote(
         session,
         mission_id,
@@ -231,7 +290,31 @@ async def approve(mission_id: str, body: ApproveCommand, session: Session = Depe
         body.command_id,
         body.quote_hash,
         body.simulated_outcome,
+        payment_mode=mode,
     )
+    if mode == "prava":
+        existing = session.scalar(select(Event).where(
+            Event.mission_id == mission_id,
+            Event.event_type == "PRAVA_SANDBOX_SESSION_CREATED",
+        ))
+        if not existing:
+            try:
+                prava_session = await PravaClient().create_session(current_quote)
+            except IntegrationError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            mission = record_prava_session(
+                session,
+                mission_id,
+                mission.version,
+                f"{body.command_id}-prava",
+                {
+                    "session_id": prava_session.session_id,
+                    "order_id": prava_session.order_id,
+                    "approval_url": prava_session.approval_url,
+                    "expires_at": prava_session.expires_at,
+                },
+            )
+        return mission_view(session, mission)
     if mission.phase in {"PAYMENT_DECLINED", "CHECKOUT_OUTCOME_UNKNOWN"}:
         return mission_view(session, mission)
     attempt_command = f"{body.command_id}-checkout"
@@ -251,6 +334,37 @@ async def approve(mission_id: str, body: ApproveCommand, session: Session = Depe
         raise HTTPException(status_code=409, detail="approval flow cannot continue from the current phase")
     result = simulate_checkout(body.simulated_outcome, attempt.id)
     mission = finalize_checkout(session, mission_id, mission.version, f"{body.command_id}-result", attempt.id, result)
+    return mission_view(session, mission)
+
+
+@app.post(
+    "/api/missions/{mission_id}/commands/refresh-payment",
+    response_model=MissionView,
+    dependencies=[Depends(require_admin)],
+)
+async def refresh_payment(mission_id: str, body: CommandBase, session: Session = Depends(get_session)):
+    mission = session.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="mission not found")
+    event = session.scalar(select(Event).where(
+        Event.mission_id == mission_id,
+        Event.event_type == "PRAVA_SANDBOX_SESSION_CREATED",
+    ))
+    if not event:
+        raise HTTPException(status_code=409, detail="mission has no Prava session")
+    try:
+        state = await PravaClient().payment_state(event.payload["session_id"])
+    except IntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    mission = record_prava_payment_state(
+        session,
+        mission_id,
+        body.expected_version,
+        body.command_id,
+        state.status,
+        state.txn_ref_id,
+        state.credential_fields_present,
+    )
     return mission_view(session, mission)
 
 

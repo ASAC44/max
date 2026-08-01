@@ -20,6 +20,8 @@ from max_api.workflow import (
     finalize_checkout,
     package_ready,
     recover_in_progress_attempts,
+    record_prava_payment_state,
+    record_prava_session,
     requote,
     retry_allowed,
     run_robot_simulation,
@@ -61,6 +63,54 @@ def test_clarification_stops_before_commerce(session):
         Event.event_type == "CLARIFICATION_REQUIRED",
     ))
     assert (event.component, event.provider) == ("agent", "SIMULATED_PARSER")
+
+
+def test_prava_hosted_flow_stops_before_merchant_checkout(session):
+    mission = ready_for_approval(session, "prava-create")
+    mission = approve_quote(
+        session,
+        mission.id,
+        mission.version,
+        "prava-approve",
+        mission.quote_hash,
+        payment_mode="prava",
+    )
+    assert mission.phase == Phase.PAYMENT_APPROVAL_REQUIRED
+    mission = record_prava_session(session, mission.id, mission.version, "prava-session", {
+        "session_id": "ses_safe",
+        "order_id": "ord_safe",
+        "approval_url": "https://sandbox.collect.prava.space?session=ses_safe",
+        "expires_at": "2026-08-01T12:15:00Z",
+    })
+    pending = record_prava_payment_state(
+        session, mission.id, mission.version, "prava-pending", "pending", None, False
+    )
+    assert pending.phase == Phase.PAYMENT_APPROVAL_REQUIRED
+    ready = record_prava_payment_state(
+        session, pending.id, pending.version, "prava-ready", "awaiting_result", "tli_safe", True
+    )
+    assert ready.phase == Phase.PAYMENT_PERMISSION_READY
+    event = session.scalar(select(Event).where(
+        Event.mission_id == mission.id,
+        Event.event_type == "PRAVA_PERMISSION_READY",
+    ))
+    serialized = json.dumps(event.payload)
+    assert "token" not in serialized
+    assert "dynamic_cvv" not in serialized
+
+
+def test_prava_hosted_wait_can_be_cancelled(session):
+    mission = ready_for_approval(session, "prava-cancel-create")
+    waiting = approve_quote(
+        session,
+        mission.id,
+        mission.version,
+        "prava-cancel-approve",
+        mission.quote_hash,
+        payment_mode="prava",
+    )
+    cancelled = cancel(session, waiting.id, waiting.version, "prava-cancel")
+    assert cancelled.phase == Phase.CANCELLED
 
 
 def test_quote_change_invalidates_approval_and_stale_command_conflicts(session):

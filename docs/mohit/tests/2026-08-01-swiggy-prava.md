@@ -288,29 +288,38 @@ requesting it.
 
 | Capability | Confirmed | Rejected | Unknown | Evidence |
 | --- | :---: | :---: | :---: | --- |
-| MCP configuration | | | | |
-| OAuth authentication | | | | |
-| Address/serviceability | | | | |
-| Product search | | | | |
-| Cart mutation | | | | |
-| Complete quote | | | | |
-| Browser cart synchronization | | | | |
-| New-card browser form | | | | |
-| Prava session creation | | | | |
-| Passkey approval | | | | |
-| Scoped credential readiness | | | | |
-| One merchant submission | | | | |
-| Known merchant decline | | | | |
-| No successful real order | | | | |
-| Prava decline reporting | | | | |
-| Prava final failure | | | | |
+| MCP configuration | x | | | Live `get_addresses` call |
+| OAuth authentication | x | | | Browser OAuth and cached-token reuse |
+| Address/serviceability | x | | | Search returned in-stock products |
+| Product search | x | | | `milk` returned purchasable variants |
+| Cart mutation | x | | | Milk quantity 2 persisted |
+| Complete quote | x | | | ₹144 items + ₹3 handling = ₹147 |
+| Browser cart synchronization | x | | | Manual exact-field comparison |
+| New-card browser form | x | | | Operator observed card option/form |
+| Prava session creation | x | | | Matching hosted sandbox page |
+| Passkey approval | | | x | Verification failed before prompt |
+| Scoped credential readiness | | | x | Never reached `awaiting_result` |
+| One merchant submission | | | x | Not attempted |
+| Known merchant decline | | | x | Not attempted |
+| No successful real order | | | x | Order history was not recorded |
+| Prava decline reporting | | | x | Not attempted |
+| Prava final failure | | | x | Not attempted |
 
 ## Final conclusion
 
-- Verdict: Confirmed | Observed | Rejected | Inconclusive
-- What this proves:
-- What this does not prove:
-- Recommended architecture decision:
-- Reproduction result:
-- Follow-up:
-- Documents/decisions updated:
+- Verdict: **Inconclusive for end-to-end payment; Observed for Swiggy
+  discovery/cart/browser parity and Prava session creation.**
+- What this proves: production Instamart MCP OAuth, product search, cart
+  mutation, complete ₹147 quote, normal-browser cart parity, new-card option,
+  and a matching hosted Prava sandbox session all worked once.
+- What this does not prove: card/passkey approval, `awaiting_result`, scoped
+  credential readiness, one merchant submission, merchant decline, Prava
+  result reporting, or final `failed` state.
+- Recommended architecture decision: implement only the observed Instamart
+  discovery/cart/quote contract and hosted Prava-session boundary. Keep merchant
+  checkout disabled until the verification blocker is cleared.
+- Reproduction result: not yet reproduced.
+- Follow-up: repeat with a fresh hosted session containing an HTTPS callback URL
+  in a physical passkey-capable normal browser; capture only safe browser
+  capability booleans and a Prava response ID if it fails again.
+- Documents/decisions updated: reviewed for the 1 August 2026 integration.

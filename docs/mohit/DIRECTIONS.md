@@ -66,6 +66,11 @@ small as practical.
 
 ## Part A — Connect and inspect Swiggy MCP
 
+Swiggy OAuth is local to the machine and OS user running `mcp-remote`. A teammate
+or another Codex session succeeding elsewhere does not configure this machine.
+On a fresh machine, the first harmless MCP call should open the Swiggy OAuth
+page; complete it in the same user's normal browser, then rerun the call.
+
 ### 1. Record the environment
 
 Before making calls, record the date/time and timezone, operator, operating
@@ -204,6 +209,10 @@ Create a Prava sandbox session bound to:
 - the exact browser cart total; and
 - product lines that sum exactly to that total.
 
+For hosted mode, also send `integration_type: "full_checkout"` and a real HTTPS
+`callback_url`. Open the returned `iframe_url` verbatim; do not rebuild it or
+replace its `session` query value.
+
 Record only redacted Prava session/response IDs, merchant, amount, currency,
 product description, approval-URL presence, and timestamp.
 
@@ -211,6 +220,32 @@ product description, approval-URL presence, and timestamp.
 
 In Prava's hosted surface, complete sandbox card enrollment/selection, sandbox
 OTP if required, and passkey approval. Do not record sensitive values.
+
+If the hosted page says **Verification Unavailable** before card fields or a
+passkey prompt:
+
+1. Stop that session; do not continue to Swiggy checkout.
+2. Confirm it is still within the 15-minute expiry.
+3. Confirm the create request included an HTTPS `callback_url` and
+   `integration_type: "full_checkout"`.
+4. Retry once with a fresh session in current Chrome, Edge, Safari, or Firefox
+   on a physical device with screen lock/passkeys enabled. Do not use headless,
+   an embedded webview, a VM, or incognito for this diagnostic.
+5. In the browser console record only these booleans—never credentials:
+
+   ```js
+   window.isSecureContext
+   Boolean(window.PublicKeyCredential)
+   await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+   ```
+
+6. If any result is false, fix the browser/device passkey setup before another
+   session. If all are true and the fresh session still fails, capture the
+   timestamp, browser/OS version, redacted session ID, and any `X-Response-ID`
+   from the failing network response and send those to Prava support.
+
+This message is not a merchant decline. It proves only that Prava's secure
+verification surface could not initialize on that run.
 
 ### 14. Poll the session
 

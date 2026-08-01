@@ -16,6 +16,7 @@ class Phase(StrEnum):
     DRAFT = "DRAFT"
     NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
     AWAITING_OWNER_APPROVAL = "AWAITING_OWNER_APPROVAL"
+    PAYMENT_APPROVAL_REQUIRED = "PAYMENT_APPROVAL_REQUIRED"
     PAYMENT_PERMISSION_READY = "PAYMENT_PERMISSION_READY"
     MERCHANT_CHECKOUT_IN_PROGRESS = "MERCHANT_CHECKOUT_IN_PROGRESS"
     PAYMENT_DECLINED = "PAYMENT_DECLINED"
@@ -73,6 +74,13 @@ class Quote(BaseModel):
     destination: str
     environment: Environment
     expires_at: datetime
+    line_items: list["QuoteLine"] = Field(default_factory=list)
+
+
+class QuoteLine(BaseModel):
+    description: str = Field(min_length=1, max_length=200)
+    unit_price_minor: int = Field(ge=0)
+    quantity: int = Field(ge=1, le=100)
 
 
 class ProviderResult(BaseModel):
@@ -151,6 +159,15 @@ class CheckoutView(BaseModel):
     latest_attempt: AttemptView | None
 
 
+class PaymentActionView(BaseModel):
+    provider: Literal["PRAVA"]
+    environment: Literal["sandbox"]
+    session_id: str
+    order_id: str
+    approval_url: str
+    expires_at: datetime
+
+
 class MissionView(BaseModel):
     id: str
     parent_mission_id: str | None
@@ -174,3 +191,4 @@ class MissionView(BaseModel):
     attempts: list[AttemptView]
     approval: ApprovalView
     checkout: CheckoutView
+    payment_action: PaymentActionView | None = None

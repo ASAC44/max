@@ -30,6 +30,40 @@ robot tools. Responses are configured with `store=False`, and sensitive trace
 payload capture is disabled. `OPENAI_REQUEST_TIMEOUT_SECONDS` bounds the model
 call at the application layer and defaults to 30 seconds.
 
+Commerce and payment are independently selectable:
+
+```env
+MAX_COMMERCE_MODE=swiggy
+MAX_PAYMENT_MODE=prava
+PRAVA_SECRET_KEY=sk_test_...
+PRAVA_USER_ID=max-demo-owner
+PRAVA_USER_EMAIL=owner@example.com
+PRAVA_CALLBACK_URL=https://your-public-host/payment-done
+```
+
+Swiggy live mode starts the verified Instamart sequence through `mcp-remote`:
+saved address, product search, an empty-cart check, cart update, and a fresh
+quote. The first run opens Swiggy OAuth in the local browser. Raw address/cart
+responses stay in process; only the address label, selected product, variant,
+quantity, total, and fee summary enter mission state.
+
+Prava live mode creates a hosted sandbox session only after exact-quote
+approval. The returned approval URL appears as `payment_action`. Call
+`refresh-payment` after the owner completes hosted verification; the API stores
+only the Prava state, transaction reference, and whether all credential fields
+were present. It never returns or persists the network token, expiry, or
+dynamic CVV.
+
+Point `PRAVA_CALLBACK_URL` at the public HTTPS form of
+`/api/payments/prava/complete`. The route changes no state; after returning,
+the authenticated operator explicitly calls `refresh-payment`.
+
+This is intentionally not a completed Swiggy checkout adapter. The observed
+Swiggy browser cart/card handoff still needs a deterministic credential-entry
+bridge, and the current manual run is blocked by Prava's hosted
+`Verification Unavailable` screen. Until that is cleared, live mode stops safely
+at payment readiness and must not be described as end to end.
+
 ## Checks
 
 ```bash

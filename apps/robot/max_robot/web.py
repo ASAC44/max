@@ -5,10 +5,8 @@ import json
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
 
 from .core import InvalidTransition, MissionManager
-from .payments import PaymentGatewayError, PaymentService, PaymentValidationError
 
 
 PAGE = b"""<!doctype html><html lang="en"><head>
@@ -48,13 +46,11 @@ class ControlServer(ThreadingHTTPServer):
         address: tuple[str, int],
         manager: MissionManager,
         operator_pin: str,
-        payments: PaymentService | None = None,
     ) -> None:
         if len(operator_pin) < 4:
             raise ValueError("operator PIN must contain at least four characters")
         self.manager = manager
         self.operator_pin = operator_pin
-        self.payments = payments
         super().__init__(address, ControlHandler)
 
 
@@ -62,36 +58,15 @@ class ControlHandler(BaseHTTPRequestHandler):
     server: ControlServer
 
     def do_GET(self) -> None:
-        path = urlsplit(self.path).path
-        if path == "/":
+        if self.path == "/":
             self._send(PAGE, "text/html; charset=utf-8")
-        elif path == "/api/status":
+        elif self.path == "/api/status":
             self._json(HTTPStatus.OK, self.server.manager.status())
-        elif path.startswith("/api/payments/"):
-            self._payment_status(path.removeprefix("/api/payments/"))
-        elif path in {"/payments/success", "/payments/cancel"}:
-            message = (
-                "Checkout returned. Max will verify the payment status."
-                if path.endswith("success")
-                else "Payment cancelled. You may return to Max."
-            )
-            self._send(
-                f"<!doctype html><title>Max payment</title><p>{message}</p>".encode(),
-                "text/html; charset=utf-8",
-            )
         else:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self) -> None:
-        path = urlsplit(self.path).path
-        if path == "/api/payments/checkout":
-            self._create_checkout()
-            return
-        if path == "/api/payments/stripe-webhook":
-            self._stripe_webhook()
-            return
-
-        action = path.removeprefix("/api/mission/")
+        action = self.path.removeprefix("/api/mission/")
         if action not in {
             "start",
             "stop",
@@ -118,98 +93,6 @@ class ControlHandler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         supplied = self.headers.get("X-Operator-Pin", "")
         return hmac.compare_digest(supplied, self.server.operator_pin)
-
-    def _agent_authorized(self) -> bool:
-        payments = self.server.payments
-        supplied = self.headers.get("Authorization", "")
-        expected = f"Bearer {payments.api_key}" if payments else ""
-        return bool(expected) and hmac.compare_digest(supplied, expected)
-
-    def _create_checkout(self) -> None:
-        payments = self.server.payments
-        if payments is None:
-            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-        if not self._agent_authorized():
-            self._json(HTTPStatus.UNAUTHORIZED, {"error": "invalid API key"})
-            return
-        if self.headers.get_content_type() != "application/json":
-            self._json(HTTPStatus.BAD_REQUEST, {"error": "expected application/json"})
-            return
-        try:
-            payload = json.loads(self._read_body(32_768))
-            payment, replayed = payments.create_checkout(payload)
-        except (
-            json.JSONDecodeError,
-            UnicodeDecodeError,
-            PaymentValidationError,
-        ) as exc:
-            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-            return
-        except PaymentGatewayError as exc:
-            self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
-            return
-        except Exception:
-            self._json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"error": "payment service unavailable"},
-            )
-            return
-        self._json(HTTPStatus.OK if replayed else HTTPStatus.CREATED, payment)
-
-    def _payment_status(self, payment_id: str) -> None:
-        payments = self.server.payments
-        if payments is None:
-            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-        if not self._agent_authorized():
-            self._json(HTTPStatus.UNAUTHORIZED, {"error": "invalid API key"})
-            return
-        try:
-            payment = payments.get_payment(payment_id)
-        except Exception:
-            self._json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"error": "payment service unavailable"},
-            )
-            return
-        if payment is None:
-            self._json(HTTPStatus.NOT_FOUND, {"error": "payment not found"})
-            return
-        self._json(HTTPStatus.OK, payment)
-
-    def _stripe_webhook(self) -> None:
-        payments = self.server.payments
-        if payments is None:
-            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-        try:
-            result = payments.handle_webhook(
-                self._read_body(1_048_576),
-                self.headers.get("Stripe-Signature", ""),
-            )
-        except PaymentValidationError as exc:
-            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-            return
-        except Exception:
-            self._json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"error": "payment service unavailable"},
-            )
-            return
-        self._json(HTTPStatus.OK, result)
-
-    def _read_body(self, maximum: int) -> bytes:
-        try:
-            length = int(self.headers.get("Content-Length", ""))
-        except ValueError as exc:
-            raise PaymentValidationError("invalid Content-Length") from exc
-        if not 0 < length <= maximum:
-            raise PaymentValidationError("request body size is invalid")
-        body = self.rfile.read(length)
-        if len(body) != length:
-            raise PaymentValidationError("request body is incomplete")
-        return body
 
     def _run(self, action: str) -> None:
         manager = self.server.manager
@@ -258,9 +141,8 @@ def serve_in_thread(
     host: str = "127.0.0.1",
     port: int = 8080,
     operator_pin: str = "0000",
-    payments: PaymentService | None = None,
 ) -> tuple[ControlServer, threading.Thread]:
-    server = ControlServer((host, port), manager, operator_pin, payments)
+    server = ControlServer((host, port), manager, operator_pin)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread

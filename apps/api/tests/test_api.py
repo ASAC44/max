@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -6,8 +7,10 @@ from sqlalchemy.orm import sessionmaker
 
 from max_api.agent import parse_simulated
 from max_api.db import Base, build_engine, get_session
+from max_api.integrations import PravaPaymentState, PravaSession
 from max_api.main import app
-from max_api.models import Event, Mission
+from max_api.models import Event, Mission, utcnow
+from max_api.schemas import Environment, Quote, QuoteLine
 
 
 async def api_scenario(tmp_path, monkeypatch):
@@ -210,3 +213,97 @@ async def api_scenario(tmp_path, monkeypatch):
 
 def test_full_api_flow_and_conflicts(tmp_path, monkeypatch):
     asyncio.run(api_scenario(tmp_path, monkeypatch))
+
+
+async def live_api_scenario(tmp_path, monkeypatch):
+    engine = build_engine(f"sqlite:///{tmp_path / 'live-api.db'}")
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine, expire_on_commit=False)
+
+    async def override_session():
+        with TestSession() as session:
+            yield session
+
+    token = "test-live-operator-token-123456"
+    monkeypatch.setenv("MAX_ADMIN_TOKEN", token)
+    monkeypatch.setenv("MAX_AGENT_MODE", "simulated")
+    monkeypatch.setenv("MAX_COMMERCE_MODE", "swiggy")
+    monkeypatch.setenv("MAX_PAYMENT_MODE", "prava")
+    monkeypatch.setenv("PRAVA_SECRET_KEY", "sk_test_safe")
+    monkeypatch.setenv("PRAVA_USER_ID", "owner-safe")
+    monkeypatch.setenv("PRAVA_USER_EMAIL", "owner@example.test")
+    monkeypatch.setenv("PRAVA_CALLBACK_URL", "https://max.example.test/payment-done")
+
+    async def fake_quote(_self, intent):
+        return Quote(
+            revision=1,
+            merchant="SWIGGY_INSTAMART",
+            product_name="Amul Gold Milk 1 Ltr",
+            variant_id="spin-safe",
+            quantity=intent.quantity,
+            amount_minor=14_700,
+            currency="INR",
+            destination=intent.destination,
+            environment=Environment.PRODUCTION,
+            expires_at=utcnow() + timedelta(minutes=15),
+            line_items=[
+                QuoteLine(description="Amul Gold Milk 1 Ltr", unit_price_minor=7200, quantity=2),
+                QuoteLine(description="Swiggy fees", unit_price_minor=300, quantity=1),
+            ],
+        )
+
+    async def fake_session(_self, _quote):
+        return PravaSession(
+            "ses_safe",
+            "ord_safe",
+            "https://sandbox.collect.prava.space?session=ses_safe",
+            "2026-08-01T12:15:00Z",
+        )
+
+    async def fake_state(_self, _session_id):
+        return PravaPaymentState("awaiting_result", "tli_safe", True)
+
+    monkeypatch.setattr("max_api.main.SwiggyClient.quote", fake_quote)
+    monkeypatch.setattr("max_api.main.PravaClient.create_session", fake_session)
+    monkeypatch.setattr("max_api.main.PravaClient.payment_state", fake_state)
+    app.dependency_overrides[get_session] = override_session
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            callback = await client.get("/api/payments/prava/complete")
+            assert callback.status_code == 200
+            assert "refresh payment status" in callback.text
+            created = (await client.post(
+                "/api/missions",
+                headers={**headers, "Idempotency-Key": "live-create-001"},
+                json={"text": "get 2 milk under ₹200 for home"},
+            )).json()
+            assert created["quote"]["merchant"] == "SWIGGY_INSTAMART"
+            assert created["quote"]["environment"] == "production"
+            approved = (await client.post(
+                f"/api/missions/{created['id']}/commands/approve",
+                headers=headers,
+                json={
+                    "expected_version": created["version"],
+                    "command_id": "live-approve-001",
+                    "quote_hash": created["quote_hash"],
+                },
+            )).json()
+            assert approved["phase"] == "PAYMENT_APPROVAL_REQUIRED"
+            assert approved["payment_action"]["approval_url"].startswith("https://sandbox.collect.prava.space")
+            refreshed = (await client.post(
+                f"/api/missions/{created['id']}/commands/refresh-payment",
+                headers=headers,
+                json={"expected_version": approved["version"], "command_id": "live-refresh-001"},
+            )).json()
+            assert refreshed["phase"] == "PAYMENT_PERMISSION_READY"
+            serialized = str(refreshed)
+            assert "dynamic_cvv" not in serialized
+            assert "must-not-be-returned" not in serialized
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_live_provider_boundary_is_wired_without_exposing_credentials(tmp_path, monkeypatch):
+    asyncio.run(live_api_scenario(tmp_path, monkeypatch))

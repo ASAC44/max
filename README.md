@@ -76,11 +76,3 @@ docs/       # shared project documentation
 
 The API consumes the robot interface delivered by the navigation team; it does
 not duplicate robot or navigation logic.
-
-## Stripe test checkout
-
-The local Max web server can create authenticated, per-order Stripe-hosted
-Checkout URLs and record signed payment webhooks. It accepts Stripe test keys
-only and never handles card credentials. See the
-[Stripe payment demo](docs/STRIPE_PAYMENT_DEMO.md) for setup and the REST
-contract.
