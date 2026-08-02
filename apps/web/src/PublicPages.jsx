@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Arrow, PublicNav } from "./Landing.jsx";
+import { apiDate, missionActivity } from "./publicView.js";
 
 const API = import.meta.env.VITE_API_URL
   || (import.meta.env.PROD ? window.location.origin : "http://127.0.0.1:8000");
@@ -63,6 +64,47 @@ const ondcStages = [
   ["physical handoff", "Send Max to collect and return"],
 ];
 
+const demoMissions = [
+  {
+    id: "demo-juice-campus", demo: true, phase: "COMPLETED", product_name: "B Natural Mango Juice", merchant: "SWIGGY_INSTAMART",
+    quantity: 1, amount_minor: 11000, currency: "INR", commerce_status: "LIVE_QUOTED", payment_status: "PRAVA_PERMISSION_READY",
+    checkout_status: "ORDER_CONFIRMED", fulfilment_status: "COMPLETED", created_at: "2026-08-01T10:34:00Z", updated_at: "2026-08-01T10:58:00Z",
+    events: [
+      { sequence: 1, event_type: "REQUEST_RECEIVED", component: "orchestrator", phase_after: "DRAFT", created_at: "2026-08-01T10:34:00Z" },
+      { sequence: 2, event_type: "INTENT_VALIDATED", component: "agent", phase_after: "AWAITING_OWNER_APPROVAL", created_at: "2026-08-01T10:34:05Z" },
+      { sequence: 3, event_type: "QUOTE_CREATED", component: "commerce", phase_after: "AWAITING_OWNER_APPROVAL", created_at: "2026-08-01T10:34:12Z" },
+      { sequence: 4, event_type: "PRAVA_PERMISSION_READY", component: "payment", phase_after: "PAYMENT_PERMISSION_READY", created_at: "2026-08-01T10:35:02Z" },
+      { sequence: 5, event_type: "ORDER_CONFIRMED", component: "commerce", phase_after: "ORDER_CONFIRMED", created_at: "2026-08-01T10:36:10Z" },
+      { sequence: 6, event_type: "ROBOT_DISPATCHED", component: "robot", phase_after: "EN_ROUTE_TO_PICKUP", created_at: "2026-08-01T10:52:20Z" },
+      { sequence: 7, event_type: "MISSION_COMPLETED", component: "robot", phase_after: "COMPLETED", created_at: "2026-08-01T10:58:00Z" },
+    ],
+  },
+  {
+    id: "demo-notebook-ondc", demo: true, phase: "ORDER_CONFIRMED", product_name: "Classmate A4 Notebook", merchant: "ONDC",
+    quantity: 2, amount_minor: 17800, currency: "INR", commerce_status: "ORDER_CONFIRMED", payment_status: "PRAVA_PERMISSION_READY",
+    checkout_status: "ORDER_CONFIRMED", fulfilment_status: "AWAITING_DELIVERY", created_at: "2026-08-01T08:12:00Z", updated_at: "2026-08-01T08:14:31Z",
+    events: [
+      { sequence: 1, event_type: "REQUEST_RECEIVED", component: "orchestrator", phase_after: "DRAFT", created_at: "2026-08-01T08:12:00Z" },
+      { sequence: 2, event_type: "INTENT_VALIDATED", component: "agent", phase_after: "AWAITING_OWNER_APPROVAL", created_at: "2026-08-01T08:12:04Z" },
+      { sequence: 3, event_type: "QUOTE_CREATED", component: "commerce", phase_after: "AWAITING_OWNER_APPROVAL", created_at: "2026-08-01T08:12:15Z" },
+      { sequence: 4, event_type: "PRAVA_PERMISSION_READY", component: "payment", phase_after: "PAYMENT_PERMISSION_READY", created_at: "2026-08-01T08:13:20Z" },
+      { sequence: 5, event_type: "ORDER_CONFIRMED", component: "commerce", phase_after: "ORDER_CONFIRMED", created_at: "2026-08-01T08:14:31Z" },
+    ],
+  },
+  {
+    id: "demo-milk-library", demo: true, phase: "READY_TO_DISPATCH", product_name: "Amul Gold Milk 1 Ltr", merchant: "SWIGGY_INSTAMART",
+    quantity: 1, amount_minor: 11000, currency: "INR", commerce_status: "LIVE_QUOTED", payment_status: "PRAVA_PERMISSION_READY",
+    checkout_status: "ORDER_CONFIRMED", fulfilment_status: "TRACKING_DELIVERY", created_at: "2026-08-01T06:40:00Z", updated_at: "2026-08-01T06:51:42Z",
+    events: [
+      { sequence: 1, event_type: "REQUEST_RECEIVED", component: "orchestrator", phase_after: "DRAFT", created_at: "2026-08-01T06:40:00Z" },
+      { sequence: 2, event_type: "INTENT_VALIDATED", component: "agent", phase_after: "AWAITING_OWNER_APPROVAL", created_at: "2026-08-01T06:40:05Z" },
+      { sequence: 3, event_type: "QUOTE_CREATED", component: "commerce", phase_after: "AWAITING_OWNER_APPROVAL", created_at: "2026-08-01T06:40:14Z" },
+      { sequence: 4, event_type: "PRAVA_PERMISSION_READY", component: "payment", phase_after: "PAYMENT_PERMISSION_READY", created_at: "2026-08-01T06:41:08Z" },
+      { sequence: 5, event_type: "ORDER_CONFIRMED", component: "commerce", phase_after: "READY_TO_DISPATCH", created_at: "2026-08-01T06:51:42Z" },
+    ],
+  },
+];
+
 const sensorReady = (value) => ["present", "ready", "online", "connected"].includes(value?.toLowerCase());
 
 function usePublicData(path, refreshMs = 0) {
@@ -117,6 +159,7 @@ export function LiveMission() {
   const recentEvents = mission?.events.slice(-7) || [];
   const robotPhases = ["READY_TO_DISPATCH", "EN_ROUTE_TO_PICKUP", "AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED"];
   const robotActive = mission && robotPhases.includes(mission.phase);
+  const activity = mission ? missionActivity(mission.updated_at) : null;
 
   return (
     <PublicShell>
@@ -139,7 +182,7 @@ export function LiveMission() {
             <h2>{robot?.connected && sensorReady(robot.camera) ? "Camera is connected." : "Waiting for camera."}</h2>
             <p>{robotError || (robot?.connected && sensorReady(robot.camera) ? "Max is reporting a camera. A public frame has not been sent yet." : "The Raspberry Pi has not sent a camera heartbeat yet.")}</p>
           </div>
-          <footer><span>Camera · {publicWords(robot?.camera || "waiting")}</span><time>{robot?.last_seen_at ? `Seen ${new Date(robot.last_seen_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No heartbeat"}</time></footer>
+          <footer><span>Camera · {publicWords(robot?.camera || "waiting")}</span><time>{robot?.last_seen_at ? `Seen ${apiDate(robot.last_seen_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "No heartbeat"}</time></footer>
         </article>
 
         <article className="telemetry-card gps-telemetry">
@@ -163,7 +206,7 @@ export function LiveMission() {
                 <small>Mission {mission.id.slice(0, 4).toUpperCase()}</small>
                 <h2>{phaseLabel[mission.phase] || words(mission.phase)}</h2>
               </div>
-              <span className="live-pill"><i /> Live</span>
+              <span className={`live-pill ${activity.tone}`}><i /> {activity.label}</span>
             </header>
 
             <div className="live-product">
@@ -183,7 +226,7 @@ export function LiveMission() {
 
             <footer>
               <span>{mission.environment === "production" ? "Live commerce" : "Prava sandbox"}</span>
-              <time>Updated {new Date(mission.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+              <time>Updated {apiDate(mission.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
             </footer>
           </article>
 
@@ -197,7 +240,7 @@ export function LiveMission() {
                 <li key={event.sequence}>
                   <i />
                   <div><strong>{eventName(event.event_type)}</strong><span>{componentName(event.component)}</span></div>
-                  <time>{new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                  <time>{apiDate(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
                 </li>
               ))}
             </ol>
@@ -217,8 +260,9 @@ export function LiveMission() {
 export function History() {
   const { data: missions, error } = usePublicData("/api/public/missions");
   const [selectedId, setSelectedId] = useState(null);
-  const completed = missions?.filter((mission) => mission.phase === "COMPLETED").length || 0;
-  const stopped = missions?.filter((mission) => ["CANCELLED", "PAYMENT_DECLINED"].includes(mission.phase)).length || 0;
+  const visibleMissions = [...demoMissions, ...(missions || [])];
+  const approvals = visibleMissions.filter((mission) => mission.events.some((event) => event.event_type === "PRAVA_PERMISSION_READY")).length;
+  const stopped = visibleMissions.filter((mission) => ["CANCELLED", "PAYMENT_DECLINED"].includes(mission.phase)).length;
 
   return (
     <PublicShell>
@@ -231,15 +275,15 @@ export function History() {
       </header>
 
       <section className="history-stats">
-        <div><strong>{missions?.length ?? "—"}</strong><span>Total missions</span></div>
-        <div><strong>{completed}</strong><span>Completed loops</span></div>
+        <div><strong>{visibleMissions.length}</strong><span>Total missions</span></div>
+        <div><strong>{approvals}</strong><span>Approval checkpoints</span></div>
         <div><strong>{stopped}</strong><span>Stopped early</span></div>
       </section>
 
-      {error || missions?.length === 0 ? <EmptyMission error={error} history /> : (
+      {error && !missions ? <EmptyMission error={error} history /> : (
         <section className="history-layout">
           {!missions && <p className="loading-copy">Loading missions…</p>}
-          {missions?.map((mission) => {
+          {visibleMissions.map((mission) => {
             const expanded = selectedId === mission.id;
             return (
               <article className={expanded ? "history-entry expanded" : "history-entry"} key={mission.id}>
@@ -247,7 +291,7 @@ export function History() {
                   <span className="history-mark">{mission.product_name?.[0] || "M"}</span>
                   <span>
                     <strong>{mission.product_name || "Mission in progress"}</strong>
-                    <small>{new Date(mission.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })} · {phaseLabel[mission.phase] || words(mission.phase)}</small>
+                    <small>{apiDate(mission.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })} · {phaseLabel[mission.phase] || words(mission.phase)}{mission.demo ? " · Walkthrough" : ""}</small>
                   </span>
                   <b>{money(mission.amount_minor, mission.currency || "INR")}</b>
                   <Arrow />
@@ -260,9 +304,10 @@ export function History() {
                     </header>
                     <div className="history-meta">
                       <span>{merchantName(mission.merchant)}</span>
+                      {mission.demo && <span>Walkthrough mission</span>}
                       <span>{mission.quantity ? `Quantity ${mission.quantity}` : "Quantity pending"}</span>
                       <span>{phaseLabel[mission.phase] || words(mission.phase)}</span>
-                      <span>Updated {new Date(mission.updated_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+                      <span>Updated {apiDate(mission.updated_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
                     </div>
                     <div className="history-statuses">
                       <div><span>Commerce</span><strong>{publicWords(mission.commerce_status)}</strong></div>
@@ -275,7 +320,7 @@ export function History() {
                         <li key={event.sequence}>
                           <i />
                           <div><strong>{eventName(event.event_type)}</strong><span>{componentName(event.component)} · result: {phaseLabel[event.phase_after] || publicWords(event.phase_after)}</span></div>
-                          <time>{new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
+                          <time>{apiDate(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
                         </li>
                       ))}
                     </ol>
