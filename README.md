@@ -1,24 +1,24 @@
-# Max
+# Chintu
 
-**Max turns a Telegram request into a Swiggy Instamart order, an approved Prava
+**Chintu turns a Telegram request into a Swiggy Instamart order, an approved Prava
 payment, and a physical pickup completed by a Raspberry Pi robot.**
 
-Send Max what you need. It finds the item, presents the exact purchase for
+Send Chintu what you need. It finds the item, presents the exact purchase for
 approval, completes checkout, follows the delivery, rides its pulley platform
 down when the rider reaches the gate, collects the package, and brings it back
 up to you.
 
-▶ **[Watch the full Max demo on YouTube](https://www.youtube.com/watch?v=0w4cCR9zJCQ)**
+▶ **[Watch the full Chintu demo on YouTube](https://www.youtube.com/watch?v=0w4cCR9zJCQ)**
 
 <img
-  src="docs/assets/max-in-pulley.png"
-  alt="Max inside the pulley platform that carries it between floors"
+  src="docs/assets/chintu-in-pulley.png"
+  alt="Chintu inside the pulley platform that carries it between floors"
   width="420"
 />
 
-*Max inside the pulley platform that carries it up and down between floors.*
+*Chintu inside the pulley platform that carries it up and down between floors.*
 
-▶ **[Max leaving the hostel on a mission](docs/assets/max-leaving-hostel.mp4)**
+▶ **[Chintu leaving the hostel on a mission](docs/assets/chintu-leaving-hostel.mp4)**
 
 ## From request to return
 
@@ -26,7 +26,7 @@ up to you.
 Private Telegram chat
         |
         v
-OpenAI interpretation -> persisted Max mission workflow
+OpenAI interpretation -> persisted Chintu mission workflow
         |                         |
         |                         +-> Mission Control dashboard
         v
@@ -68,14 +68,14 @@ Every transition is persisted and reflected in Telegram and Mission Control,
 from clarification and approval through delivery, pickup, return, cancellation,
 and completion.
 
-## Inside Max
+## Inside Chintu
 
 - **Telegram** is the private owner interface for requests, clarification, the
   Prava approval link, payment results, delivery progress, and robot updates.
-- **The Max workflow** keeps the quote, approval, payment, checkout, order, and
+- **The Chintu workflow** keeps the quote, approval, payment, checkout, order, and
   robot lifecycle connected as one mission.
 - **Swiggy Instamart** provides live product and order data through
-  `get_orders`/`track_order`; only the correlated arrival event dispatches Max.
+  `get_orders`/`track_order`; only the correlated arrival event dispatches Chintu.
 - **Prava** binds owner approval to the exact purchase before checkout.
 - **The Raspberry Pi agent** connects outbound to the backend, reports hardware
   health, receives authenticated jobs, and synchronizes the pickup lifecycle.
@@ -84,8 +84,8 @@ and completion.
 - **The ESP32 pulley controller** moves the platform down and up through a
   BTS7960, with normally-closed limits, keepalives, timeouts, and latched faults.
 
-Max has completed this flow as a physical system. Secrets, OAuth sessions,
-route maps, GPIO assignments, and calibration values are specific to each Max
+Chintu has completed this flow as a physical system. Secrets, OAuth sessions,
+route maps, GPIO assignments, and calibration values are specific to each Chintu
 installation and stay outside the repository.
 
 ## Design
@@ -99,9 +99,9 @@ each advance only from their corresponding verified state.
 
 [Swiggy-to-Pi bridge →](docs/ORDER-STATUS-BRIDGE.md) · [Navigation →](docs/mohit/NAVIGATION.md) · [Pulley firmware →](firmware/pulley_controller/README.md) · [Physical setup →](docs/PHYSICAL-ROBOT-DEMO.md)
 
-## Why Max
+## Why Chintu
 
-Max treats commerce and physical fulfilment as one continuous mission. The same
+Chintu treats commerce and physical fulfilment as one continuous mission. The same
 state connects the purchase its owner approved to the order being delivered and
 the robot carrying it home.
 
@@ -131,14 +131,14 @@ Scripts: [setup](scripts/setup.sh) · [start/stop development](scripts/dev.sh)
 
 ```text
 apps/
-├── api/          # Max agent, mission workflow, persistence, integrations
+├── api/          # Chintu agent, mission workflow, persistence, integrations
 │   ├── max_api/
 │   ├── migrations/
 │   └── tests/
 ├── web/          # Mission Control dashboard
 │   └── src/
 ├── robot/        # Raspberry Pi ROS 2/VSLAM, safety, and pulley integration
-└── blinkit-mcp/  # retained unofficial experiment; not part of the Max flow
+└── blinkit-mcp/  # retained unofficial experiment; not part of the Chintu flow
 firmware/
 └── pulley_controller/ # fail-closed ESP32 pulley controller
 docs/             # shared project and operating documentation
