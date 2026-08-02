@@ -11,7 +11,9 @@ def generate_launch_description():
     database = LaunchConfiguration("database")
     reference_dir = LaunchConfiguration("reference_dir")
     runtime_mode = LaunchConfiguration("runtime_mode")
-    route = os.path.join(share, "config", "route.json")
+    route = LaunchConfiguration("route")
+    control_config = LaunchConfiguration("control_config")
+    tag_config = LaunchConfiguration("tag_config")
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -22,6 +24,18 @@ def generate_launch_description():
                 default_value=os.path.join(share, "references"),
             ),
             DeclareLaunchArgument("runtime_mode", default_value="simulation"),
+            DeclareLaunchArgument(
+                "route",
+                default_value=os.path.join(share, "config", "route.json"),
+            ),
+            DeclareLaunchArgument(
+                "control_config",
+                default_value=os.path.join(share, "config", "max.yaml"),
+            ),
+            DeclareLaunchArgument(
+                "tag_config",
+                default_value=os.path.join(share, "config", "tags.yaml"),
+            ),
             Node(
                 package="rtabmap_slam",
                 executable="rtabmap",
@@ -42,7 +56,7 @@ def generate_launch_description():
                 package="apriltag_ros",
                 executable="apriltag_node",
                 name="apriltag",
-                parameters=[os.path.join(share, "config", "tags.yaml")],
+                parameters=[tag_config],
                 remappings=[
                     ("image_rect", "/camera/image_rect"),
                     ("camera_info", "/camera/camera_info"),
@@ -62,7 +76,7 @@ def generate_launch_description():
                 package="max_robot",
                 executable="max-control",
                 parameters=[
-                    os.path.join(share, "config", "max.yaml"),
+                    control_config,
                     {"route_file": route, "runtime_mode": runtime_mode},
                 ],
                 output="screen",

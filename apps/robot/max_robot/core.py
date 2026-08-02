@@ -90,6 +90,7 @@ class MissionManager:
         safety: SafetyGate | None = None,
         *,
         runtime_mode: str = "unknown",
+        pulley_required: bool = False,
     ) -> None:
         self.safety = safety or SafetyGate()
         self.runtime_mode = runtime_mode
@@ -97,6 +98,8 @@ class MissionManager:
         self.state = MissionState.IDLE
         self.last_reason = ""
         self.mission_id: str | None = None
+        self.pulley_required = pulley_required
+        self.pulley_status = "connecting" if pulley_required else "not_configured"
         self._resume_state: MissionState | None = None
         self._lock = threading.RLock()
 
@@ -223,6 +226,8 @@ class MissionManager:
                 "localization": self.safety.localization,
                 "obstruction": self.safety.obstruction,
                 "emergency_stop": self.safety.emergency_stop,
+                "pulley_required": self.pulley_required,
+                "pulley_status": self.pulley_status,
                 "movement_allowed": self.state in MOVING_STATES and not reasons,
                 "ready": self.state in {MissionState.IDLE, MissionState.COMPLETE, MissionState.CANCELLED} and not reasons,
                 "safety_reasons": reasons,

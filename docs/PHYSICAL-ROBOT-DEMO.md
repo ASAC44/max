@@ -10,7 +10,9 @@ normally-closed emergency stop all report healthy.
 Install ROS 2 Lyrical and the dependencies in `apps/robot/package.xml`, build
 the package, and source the workspace. Copy a private motor configuration from
 `apps/robot/config/max.yaml`; configure eight distinct BTS7960 pins and the
-`max_estop.gpio` input.
+`max_estop.gpio` input. If the route uses the pulley, also configure its
+dedicated AprilTag/waypoint and `max_control.pulley_device` as described in
+[mohit/NAVIGATION.md](mohit/NAVIGATION.md#pulley-checkpoint).
 
 With wheels raised, validate motor polarity and the emergency stop. Build the
 map by starting sensor-only mapping mode and slowly pushing the unpowered robot
@@ -20,6 +22,8 @@ along the route so measured encoder odometry remains available:
 ros2 launch max_robot hardware.launch.py \
   database:=/var/lib/max-robot/navigation/max_rtabmap.db \
   motor_config:=/etc/max-robot/motors.yaml \
+  route:=/etc/max-robot/route.json \
+  tag_config:=/etc/max-robot/tags.yaml \
   mapping:=true
 
 ```
@@ -72,3 +76,7 @@ Emergency-stop release is separate and never resumes motion automatically.
 - Thirty obstruction approaches stop without collision.
 - Stop commands appear within 250 ms of safety faults.
 - Network loss, localization loss, and emergency stop never advance lifecycle.
+- The chassis is stationary on the configured pulley checkpoint before ESP32
+  motion starts; unplugging serial or missing keepalives stops pulley motion.
+- Outbound reaches the lower limit and return reaches the upper limit without
+  timeout or automatic fault reset.

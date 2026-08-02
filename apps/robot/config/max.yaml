@@ -4,6 +4,12 @@ max_control:
     web_port: 8080
     max_linear_speed: 0.15
     minimum_tag_margin: 30.0
+    # Required only when the route contains a pulley checkpoint.
+    pulley_device: ""
+    pulley_settle_seconds: 0.5
+    pulley_stop_timeout_seconds: 3.0
+    pulley_max_linear_speed: 0.01
+    pulley_max_angular_speed: 0.05
 
 max_obstruction:
   ros__parameters:

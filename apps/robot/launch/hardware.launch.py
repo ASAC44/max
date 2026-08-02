@@ -12,10 +12,14 @@ from launch_ros.actions import Node
 def generate_launch_description():
     share = get_package_share_directory("max_robot")
     motor_config = LaunchConfiguration("motor_config")
+    route = LaunchConfiguration("route")
+    tag_config = LaunchConfiguration("tag_config")
     return LaunchDescription([
         DeclareLaunchArgument("database", default_value="/tmp/max_rtabmap.db"),
         DeclareLaunchArgument("reference_dir", default_value=os.path.join(share, "references")),
         DeclareLaunchArgument("motor_config", default_value=os.path.join(share, "config", "max.yaml")),
+        DeclareLaunchArgument("route", default_value=os.path.join(share, "config", "route.json")),
+        DeclareLaunchArgument("tag_config", default_value=os.path.join(share, "config", "tags.yaml")),
         DeclareLaunchArgument("mapping", default_value="false"),
         Node(
             package="camera_ros",
@@ -68,6 +72,9 @@ def generate_launch_description():
                 "database": LaunchConfiguration("database"),
                 "reference_dir": LaunchConfiguration("reference_dir"),
                 "runtime_mode": "physical",
+                "route": route,
+                "control_config": motor_config,
+                "tag_config": tag_config,
             }.items(),
             condition=UnlessCondition(LaunchConfiguration("mapping")),
         ),

@@ -10,7 +10,7 @@ User=pi
 Group=pi
 EnvironmentFile=/etc/max-robot/agent.env
 Environment=AMENT_PREFIX_PATH=/opt/max-robot/venv:/opt/ros/lyrical
-ExecStart=/bin/sh -c '. /opt/ros/lyrical/setup.sh && exec ros2 launch max_robot hardware.launch.py database:=$${MAX_NAVIGATION_DATABASE} reference_dir:=$${MAX_NAVIGATION_REFERENCE_DIR} motor_config:=$${MAX_NAVIGATION_MOTOR_CONFIG}'
+ExecStart=/bin/sh -c '. /opt/ros/lyrical/setup.sh && exec ros2 launch max_robot hardware.launch.py database:=$${MAX_NAVIGATION_DATABASE} reference_dir:=$${MAX_NAVIGATION_REFERENCE_DIR} motor_config:=$${MAX_NAVIGATION_MOTOR_CONFIG} route:=$${MAX_NAVIGATION_ROUTE:-/opt/max-robot/venv/share/max_robot/config/route.json} tag_config:=$${MAX_NAVIGATION_TAG_CONFIG:-/opt/max-robot/venv/share/max_robot/config/tags.yaml}'
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10

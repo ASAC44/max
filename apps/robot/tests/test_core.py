@@ -74,6 +74,7 @@ class MissionTests(unittest.TestCase):
         status = manager.status(now=0)
         self.assertEqual(status["runtime_mode"], "physical")
         self.assertEqual(status["waypoint_index"], 0)
+        self.assertFalse(status["pulley_required"])
 
     def test_same_mission_start_is_idempotent(self) -> None:
         manager = MissionManager(ready_gate())

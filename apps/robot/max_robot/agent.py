@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from .bridge import BridgeState
 from .poller import PollerError, control_url
 
-AGENT_VERSION = "0.4.0"
+AGENT_VERSION = "0.5.0"
 LIFECYCLE_BY_PHASE = {
     "READY_TO_DISPATCH": "AT_PICKUP",
     "AT_PICKUP": "ITEM_SECURED",
@@ -202,7 +202,7 @@ class UnifiedRobotAgent:
     def _physical_subsystems(status: dict[str, Any]) -> dict[str, str]:
         reasons = " ".join(str(value) for value in status.get("safety_reasons", []))
         healthy = lambda name: "degraded" if name in reasons else "healthy"
-        return {
+        subsystems = {
             "camera": healthy("camera"),
             "odometry": healthy("odometry"),
             "localization": "healthy" if status.get("localization") == "TRACKING" and "localization" not in reasons else "degraded",
@@ -215,6 +215,13 @@ class UnifiedRobotAgent:
                 else "healthy"
             ),
         }
+        if status.get("pulley_required"):
+            subsystems["pulley"] = (
+                "healthy"
+                if status.get("pulley_status") in {"ready", "moving"}
+                else "degraded"
+            )
+        return subsystems
 
     def sync_order_status(self) -> int:
         response = self.backend.request(

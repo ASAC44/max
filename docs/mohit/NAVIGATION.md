@@ -55,6 +55,8 @@ localization; detected obstruction; or emergency stop forces a zero command.
 - `apps/robot/max_robot/web.py`: PIN-protected local control API and page.
 - `apps/robot/max_robot/ros_node.py`: ROS integration, route execution, and
   zero-command watchdog.
+- `apps/robot/max_robot/pulley.py`: non-blocking ESP32 serial protocol and
+  keepalive watchdog integration.
 - `apps/robot/max_robot/vision_node.py`: live obstruction node and reference-frame
   recorder.
 - `apps/robot/launch/`: simulation, mapping, and localization/navigation launches.
@@ -171,6 +173,40 @@ Open `http://<workstation-ip>:8080` from the phone on the same trusted local
 network. The prototype UI does not provide TLS. Start is rejected until
 camera, odometry, localization, obstruction, and controller heartbeats are
 healthy.
+
+### Pulley checkpoint
+
+Do not guess the pulley location from an existing tag. Add the measured
+platform waypoint and its dedicated AprilTag to the private route:
+
+```json
+{
+  "pulley": {
+    "tag": 3,
+    "waypoint": 4,
+    "outbound_direction": "DOWN",
+    "return_direction": "UP"
+  }
+}
+```
+
+Add the same tag to the private `tags.yaml`, set
+`MAX_NAVIGATION_TAG_CONFIG=/etc/max-robot/tags.yaml`, and set `pulley_device` in
+the private hardware configuration, preferably to a stable udev link such as
+`/dev/max-pulley`.
+
+```yaml
+max_control:
+  ros__parameters:
+    pulley_device: /dev/max-pulley
+```
+
+Physical startup fails if the route requires the pulley but the serial device
+is missing. At the checkpoint the chassis stops, remains below the configured
+odometry speed limits for the settle interval, and must still see the tag
+before the Pi sends `MOVE`. The Pi sends keepalives until the ESP32 reports the
+correct end limit; faults trigger the navigation emergency stop and never
+auto-reset.
 
 ### 5. Test obstructions
 

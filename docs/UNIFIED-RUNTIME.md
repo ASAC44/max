@@ -67,6 +67,10 @@ and healthy camera, measured odometry, localization, obstruction, controller,
 motor, and emergency-stop states. Commissioning and installation are described
 in [PHYSICAL-ROBOT-DEMO.md](PHYSICAL-ROBOT-DEMO.md).
 
+Routes containing a pulley checkpoint also require the local ESP32 serial
+controller to be healthy. The checkpoint and serial device configuration are
+documented in [mohit/NAVIGATION.md](mohit/NAVIGATION.md#pulley-checkpoint).
+
 Manual remote keyboard control is a separate, explicitly armed operator path.
 It does not change the autonomous safety contract. Its
 single-controller lease, approved key map, uinput target, dead-man releases,

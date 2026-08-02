@@ -33,7 +33,7 @@ fi
 apt-get update
 apt-get install -y python3-venv python3-evdev python3-lgpio kmod ffmpeg pipewire-bin
 getent group input >/dev/null || groupadd --system input
-usermod -a -G input pi
+usermod -a -G input,dialout pi
 printf '%s\n' uinput >/etc/modules-load.d/max-uinput.conf
 printf '%s\n' 'KERNEL=="uinput", MODE="0660", GROUP="input"' >/etc/udev/rules.d/90-max-uinput.rules
 modprobe uinput
