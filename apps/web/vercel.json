@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/live", "destination": "/index.html" },
+    { "source": "/history", "destination": "/index.html" },
+    { "source": "/ondc", "destination": "/index.html" },
+    { "source": "/control", "destination": "/index.html" }
+  ]
+}

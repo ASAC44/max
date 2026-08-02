@@ -72,6 +72,9 @@ from .schemas import (
     MissionReply,
     MissionView,
     PaymentActionView,
+    PublicEventView,
+    PublicMissionView,
+    PublicRobotView,
     Quote,
     RequoteCommand,
     RobotPollAck,
@@ -253,6 +256,34 @@ def mission_view(session: Session, mission: Mission) -> MissionView:
         robot_job=RobotJobView.model_validate(robot_job) if robot_job else None,
         source_order_events=source_order_events,
         delivery=mission.delivery,
+    )
+
+
+def public_mission_view(session: Session, mission: Mission) -> PublicMissionView:
+    quote = mission.quote or {}
+    delivery = mission.delivery or {}
+    events = session.scalars(
+        select(Event).where(Event.mission_id == mission.id).order_by(Event.sequence)
+    ).all()
+    return PublicMissionView(
+        id=mission.id,
+        phase=mission.phase,
+        environment=mission.environment,
+        product_name=quote.get("product_name"),
+        merchant=quote.get("merchant"),
+        quantity=quote.get("quantity"),
+        amount_minor=quote.get("amount_minor"),
+        currency=quote.get("currency"),
+        commerce_status=mission.commerce_status,
+        payment_status=mission.payment_status,
+        checkout_status=mission.checkout_status,
+        fulfilment_status=mission.fulfilment_status,
+        notification_status=mission.notification_status,
+        delivery_status=delivery.get("status"),
+        robot_status=delivery.get("robot_status"),
+        created_at=mission.created_at,
+        updated_at=mission.updated_at,
+        events=[PublicEventView.model_validate(event) for event in events],
     )
 
 
@@ -912,6 +943,41 @@ async def create(
     if resolved_quote is not None:
         mission = await start_live_prava_approval(session, mission, parse_command)
     return mission_view(session, mission)
+
+
+@app.get("/api/public/missions", response_model=list[PublicMissionView])
+async def public_missions(session: Session = Depends(get_session)):
+    missions = session.scalars(select(Mission).order_by(Mission.updated_at.desc())).all()
+    return [public_mission_view(session, mission) for mission in missions]
+
+
+@app.get("/api/public/missions/active", response_model=PublicMissionView | None)
+async def public_active_mission(session: Session = Depends(get_session)):
+    mission = session.scalar(select(Mission).where(Mission.active_slot == "active"))
+    return public_mission_view(session, mission) if mission else None
+
+
+@app.get("/api/public/robot", response_model=PublicRobotView)
+async def public_robot(session: Session = Depends(get_session)):
+    node = latest_robot_node(session)
+    if not node:
+        return PublicRobotView(
+            connected=False,
+            status="WAITING_FOR_HEARTBEAT",
+            camera="WAITING",
+            gps="WAITING",
+            last_seen_at=None,
+        )
+    seen = node.last_seen_at
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return PublicRobotView(
+        connected=(utcnow() - seen).total_seconds() <= robot_heartbeat_stale_seconds(),
+        status=node.status,
+        camera=str(node.subsystems.get("camera", "unknown")),
+        gps=str(node.subsystems.get("gps", "unknown")),
+        last_seen_at=node.last_seen_at,
+    )
 
 
 @app.get("/api/missions/active", response_model=MissionView, dependencies=[Depends(require_admin)])

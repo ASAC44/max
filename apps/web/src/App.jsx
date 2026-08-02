@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Landing from "./Landing.jsx";
+import { History, LiveMission, OndcSandbox } from "./PublicPages.jsx";
 import TeleopPanel from "./TeleopPanel.jsx";
 
 const API = import.meta.env.VITE_API_URL
@@ -9,7 +11,7 @@ const money = (minor, currency = "INR") =>
 
 const newCommand = () => crypto.randomUUID();
 
-export default function App() {
+function MissionControl() {
   const [token, setToken] = useState("");
   const [request, setRequest] = useState("get 1 milk under ₹300 for work");
   const [reply, setReply] = useState("");
@@ -256,17 +258,13 @@ export default function App() {
   };
 
   return (
-    <main>
-      <header>
+    <main className="control-main">
+      <header className="control-header">
         <div>
-          <p className="eyebrow">MAX / PHASE 3A</p>
+          <a className="control-home" href="/">max.</a>
+          <p className="eyebrow">Operator workspace</p>
           <h1>Mission control</h1>
         </div>
-        <span className="truth">
-          {mission?.environment === "staged_demo"
-            ? "MIXED · STAGED PACKAGE + LOCAL ROBOT SIM"
-            : `${(mission?.environment || "local").toUpperCase()} · ${(mission?.agent_mode || "simulated").toUpperCase()}`}
-        </span>
       </header>
 
       <section className="compose panel">
@@ -422,4 +420,14 @@ export default function App() {
       )}
     </main>
   );
+}
+
+export default function App() {
+  const page = {
+    "/": <Landing />,
+    "/live": <LiveMission />,
+    "/history": <History />,
+    "/ondc": <OndcSandbox />,
+  }[window.location.pathname];
+  return page || <MissionControl />;
 }

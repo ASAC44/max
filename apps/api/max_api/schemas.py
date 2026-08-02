@@ -183,6 +183,46 @@ class EventView(BaseModel):
     created_at: datetime
 
 
+class PublicEventView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    sequence: int
+    event_type: str
+    component: str
+    environment: str
+    phase_after: str
+    created_at: datetime
+
+
+class PublicMissionView(BaseModel):
+    id: str
+    phase: str
+    environment: str
+    product_name: str | None
+    merchant: str | None
+    quantity: int | None
+    amount_minor: int | None
+    currency: str | None
+    commerce_status: str
+    payment_status: str
+    checkout_status: str
+    fulfilment_status: str
+    notification_status: str
+    delivery_status: str | None
+    robot_status: str | None
+    created_at: datetime
+    updated_at: datetime
+    events: list[PublicEventView]
+
+
+class PublicRobotView(BaseModel):
+    connected: bool
+    status: str
+    camera: str
+    gps: str
+    last_seen_at: datetime | None
+
+
 class AttemptView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

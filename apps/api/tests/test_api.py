@@ -98,6 +98,31 @@ async def api_scenario(tmp_path, monkeypatch):
             assert mission["phase"] == "AWAITING_OWNER_APPROVAL"
             assert mission["approval"]["quote_hash"] is None
 
+            public_active = await client.get("/api/public/missions/active")
+            assert public_active.status_code == 200
+            public_mission = public_active.json()
+            assert public_mission["product_name"] == "milk"
+            assert "request_text" not in public_mission
+            assert "destination" not in public_mission
+            assert "quote_hash" not in public_mission
+            assert "payment_action" not in public_mission
+            assert "payload" not in public_mission["events"][0]
+            assert "work" not in public_active.text
+
+            public_history = await client.get("/api/public/missions")
+            assert public_history.status_code == 200
+            assert public_history.json()[0]["id"] == mission["id"]
+
+            public_robot = await client.get("/api/public/robot")
+            assert public_robot.status_code == 200
+            assert public_robot.json() == {
+                "connected": False,
+                "status": "WAITING_FOR_HEARTBEAT",
+                "camera": "WAITING",
+                "gps": "WAITING",
+                "last_seen_at": None,
+            }
+
             blocked_create = await client.post(
                 "/api/missions",
                 headers={**headers, "Idempotency-Key": "api-blocked-create"},
