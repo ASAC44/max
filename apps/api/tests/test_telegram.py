@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from max_api.db import Base, build_engine, get_session
+from max_api.config import telegram_worker_interval_seconds
 from max_api.main import app
 from max_api.models import Mission, TelegramNotification, TelegramUpdate, utcnow
 from max_api.telegram import (
@@ -21,6 +22,11 @@ from max_api.telegram import (
     mission_message,
     parse_telegram_update,
 )
+
+
+def test_telegram_worker_interval_returns_configured_value(monkeypatch):
+    monkeypatch.setenv("MAX_TELEGRAM_WORKER_INTERVAL_SECONDS", "2.5")
+    assert telegram_worker_interval_seconds() == 2.5
 
 
 def test_parse_telegram_update_keeps_only_required_owner_fields():

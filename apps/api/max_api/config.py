@@ -291,6 +291,7 @@ def telegram_worker_interval_seconds() -> float:
         raise RuntimeError("MAX_TELEGRAM_WORKER_INTERVAL_SECONDS must be a number") from exc
     if not 1 <= value <= 60:
         raise RuntimeError("MAX_TELEGRAM_WORKER_INTERVAL_SECONDS must be between 1 and 60")
+    return value
 
 
 def robot_base_url() -> str:
