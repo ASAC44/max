@@ -117,6 +117,26 @@ def test_prava_hosted_wait_can_be_cancelled(session):
     assert cancelled.phase == Phase.CANCELLED
 
 
+def test_confirmed_production_order_requires_provider_cancellation(session):
+    mission = ready_for_approval(session, "production-cancel-create")
+    mission.phase = Phase.ORDER_CONFIRMED
+    mission.environment = "production"
+    session.commit()
+
+    with pytest.raises(Conflict, match="cannot be cancelled locally"):
+        cancel(session, mission.id, mission.version, "unsafe-local-cancel")
+
+    cancelled = cancel(
+        session,
+        mission.id,
+        mission.version,
+        "provider-cancel",
+        source="swiggy_status",
+        source_status="CANCELLED",
+    )
+    assert cancelled.phase == Phase.CANCELLED
+
+
 def test_quote_change_invalidates_approval_and_stale_command_conflicts(session):
     mission = ready_for_approval(session)
     old_hash = mission.quote_hash

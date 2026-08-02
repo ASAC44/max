@@ -93,7 +93,13 @@ def current_robot_job(session: Session) -> RobotJob | None:
         select(RobotJob)
         .where(
             RobotJob.status.in_(
-                ("ACKNOWLEDGED", "AT_PICKUP", "ITEM_SECURED", "RETURNING")
+                (
+                    "ACKNOWLEDGED",
+                    "AT_PICKUP",
+                    "ITEM_SECURED",
+                    "RETURNING",
+                    "CANCEL_REQUESTED",
+                )
             )
         )
         .order_by(RobotJob.created_at)
@@ -163,8 +169,11 @@ def record_robot_lifecycle_report(
         "ITEM_SECURED",
         "RETURNING",
         "COMPLETED",
+        "CANCEL_REQUESTED",
     }:
         raise Conflict("robot job has not been acknowledged")
+    if job.status == "CANCEL_REQUESTED" and report.stage != "CANCELLED":
+        raise Conflict("robot cancellation is pending")
     progression = {
         "ACKNOWLEDGED": 0,
         "AT_PICKUP": 1,
@@ -183,7 +192,9 @@ def record_robot_lifecycle_report(
         motion_started=report.motion_started,
     )
     job = session.get(RobotJob, report.command_id)
-    if progression[report.stage] > progression[job.status]:
+    if report.stage == "CANCELLED":
+        job.status = "CANCELLED"
+    elif progression[report.stage] > progression[job.status]:
         job.status = report.stage
     session.commit()
     return mission

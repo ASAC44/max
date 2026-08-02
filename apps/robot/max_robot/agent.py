@@ -268,6 +268,30 @@ class UnifiedRobotAgent:
         job, resumed = self._active_job()
         if job is None:
             return False
+        if job.get("job_status") == "CANCEL_REQUESTED":
+            if not self.physical:
+                raise PollerError("dry-run job cannot request a physical stop")
+            self.local_robot.cancel()
+            stopped = self.local_robot.status()
+            if (
+                stopped.get("mission") != "CANCELLED"
+                or stopped.get("mission_id") != job["mission_id"]
+            ):
+                raise PollerError("local robot did not confirm cancellation")
+            self.backend.request(
+                "POST",
+                "/api/robot/v1/lifecycle",
+                {
+                    "mission_id": job["mission_id"],
+                    "command_id": job["command_id"],
+                    "event_id": f"{job['command_id']}-cancelled",
+                    "expected_version": job["expected_version"],
+                    "stage": "CANCELLED",
+                    "dry_run": False,
+                    "motion_started": True,
+                },
+            )
+            return True
         if not resumed:
             motion_started = False
             if self.physical:

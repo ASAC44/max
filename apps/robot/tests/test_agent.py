@@ -284,6 +284,38 @@ class UnifiedRobotAgentTests(unittest.TestCase):
         self.assertFalse(report["dry_run"])
         self.assertTrue(report["motion_started"])
 
+    def test_provider_cancellation_stops_local_robot_before_reporting(self):
+        backend = FakeBackend([
+            {
+                "schema_version": 1,
+                "motion_enabled": True,
+                "job": {
+                    "schema_version": 1,
+                    "mission_id": "mission-live-0001",
+                    "command_id": "command-live-0001",
+                    "destination": "home",
+                    "dry_run": False,
+                    "expected_version": 5,
+                    "phase": "EN_ROUTE_TO_PICKUP",
+                    "job_status": "CANCEL_REQUESTED",
+                },
+            },
+            {"phase": "CANCELLED", "version": 6},
+        ])
+        local = FakeLocalRobot([
+            {**READY, "mission": "CANCELLED", "mission_id": "mission-live-0001"}
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = UnifiedRobotAgent(
+                backend=backend,
+                state=BridgeState(Path(directory) / "agent.json"),
+                physical=True,
+                local_robot=local,
+            )
+            self.assertTrue(agent.run_once())
+        self.assertEqual(local.cancelled, 1)
+        self.assertEqual(backend.requests[-1][2]["stage"], "CANCELLED")
+
     def test_physical_ack_failure_cancels_local_motion(self):
         backend = FakeBackend([
             {"schema_version": 1, "motion_enabled": True, "job": None},

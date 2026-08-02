@@ -219,6 +219,27 @@ def test_every_status_reaches_robot_stream_and_only_arrival_queues_job(
         engine.dispose()
 
 
+def test_arrival_queues_autonomous_job_only_when_explicitly_enabled(
+    session,
+    monkeypatch,
+):
+    monkeypatch.setenv("MAX_ROBOT_DRY_RUN", "false")
+    session.add(production_order())
+    session.commit()
+    apply_order_snapshot(
+        session,
+        "mission-order-status-0001",
+        SwiggyOrderSnapshot(
+            "order-safe-0001",
+            "Delivery partner has arrived",
+        ),
+    )
+    job = session.scalar(select(RobotJob))
+    assert job.dry_run is False
+    assert job.trigger_source == "SWIGGY"
+    assert job.trigger_status == "ARRIVED_AT_DELIVERY_LOCATION"
+
+
 def test_status_regression_does_not_replace_current_state(session):
     session.add(production_order())
     session.commit()
@@ -262,6 +283,38 @@ def test_provider_cancellation_revokes_queued_job(session):
     assert child.phase == "CANCELLED"
     assert child.commerce_status == "SWIGGY_CANCELLED"
     assert job.status == "CANCELLED"
+
+
+def test_provider_cancellation_requests_stop_for_active_robot(session, monkeypatch):
+    monkeypatch.setenv("MAX_ROBOT_DRY_RUN", "false")
+    session.add(production_order())
+    session.commit()
+    apply_order_snapshot(
+        session,
+        "mission-order-status-0001",
+        SwiggyOrderSnapshot(
+            "order-safe-0001",
+            "Delivery partner has arrived",
+        ),
+    )
+    child = session.scalar(select(Mission).where(
+        Mission.parent_mission_id == "mission-order-status-0001"
+    ))
+    job = session.scalar(select(RobotJob).where(RobotJob.mission_id == child.id))
+    child.phase = "EN_ROUTE_TO_PICKUP"
+    child.fulfilment_status = "EN_ROUTE_TO_PICKUP"
+    job.status = "ACKNOWLEDGED"
+    session.commit()
+
+    apply_order_snapshot(
+        session,
+        "mission-order-status-0001",
+        SwiggyOrderSnapshot("order-safe-0001", "Cancelled by merchant"),
+    )
+    session.refresh(child)
+    session.refresh(job)
+    assert child.phase == "EN_ROUTE_TO_PICKUP"
+    assert job.status == "CANCEL_REQUESTED"
 
 
 def test_worker_isolates_one_order_failure_and_skips_terminal_orders(

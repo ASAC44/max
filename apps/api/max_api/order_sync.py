@@ -214,8 +214,18 @@ def apply_order_snapshot(
             job = session.scalar(
                 select(RobotJob).where(RobotJob.mission_id == child.id)
             )
-            if job and job.status != "COMPLETED":
-                job.status = "CANCELLED"
+            if job and job.status not in {
+                "COMPLETED",
+                "CANCELLED",
+                "CANCEL_REQUESTED",
+            }:
+                job.status = (
+                    "CANCEL_REQUESTED"
+                    if not job.dry_run
+                    and job.status
+                    in {"ACKNOWLEDGED", "AT_PICKUP", "ITEM_SECURED", "RETURNING"}
+                    else "CANCELLED"
+                )
                 session.commit()
             if child.phase in {Phase.ORDER_CONFIRMED, Phase.READY_TO_DISPATCH}:
                 cancel(

@@ -998,6 +998,14 @@ def cancel(
     if existing := _existing_command(session, command_id, "cancel", command_payload, mission_id):
         return existing
     mission = _mission(session, mission_id)
+    if (
+        source == "operator"
+        and mission.environment == Environment.PRODUCTION
+        and mission.phase == Phase.ORDER_CONFIRMED
+    ):
+        raise Conflict(
+            "a confirmed Swiggy order cannot be cancelled locally; cancel it through Swiggy"
+        )
     if mission.phase not in {
         Phase.DRAFT,
         Phase.NEEDS_CLARIFICATION,
