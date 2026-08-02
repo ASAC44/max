@@ -95,6 +95,8 @@ apps/
 │   └── src/
 ├── robot/        # navigation team's ROS 2 package, simulation, and tests
 └── blinkit-mcp/  # retained unofficial experiment; not part of the Max flow
+firmware/
+└── pulley_controller/ # fail-closed ESP32 pulley controller
 docs/             # shared project and operating documentation
 scripts/          # dependency setup and local process launcher
 ```
