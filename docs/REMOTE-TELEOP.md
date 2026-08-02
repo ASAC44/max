@@ -78,8 +78,8 @@ from becoming a second uncontrolled input path.
   **Enable keyboard** again after an outage.
 - Client and server sequences reject conflicting duplicates and old updates.
   Timestamp and expiry checks reject delayed packets. Target acknowledgements
-  and heartbeats are cross-checked against backend state; disagreement latches
-  emergency stop.
+  and heartbeats are cross-checked against backend state; disagreement releases
+  every key and re-arms the target without fabricating an operator E-stop.
 
 This lease is intentionally in-memory and the API must run as one Uvicorn
 process. Do not add multiple API workers without first replacing it with a
@@ -97,8 +97,9 @@ MAX_TELEOP_STATE_FILE=/data/teleop-state.json
 MAX_WEB_ORIGIN=https://max.example.com
 ```
 
-The Compose service mounts `/data` as a durable volume. A fresh deployment
-therefore starts latched and remains latched across API restarts.
+The Compose service mounts `/data` as a durable volume. Only an explicit
+operator E-stop is persisted across API restarts; missing or unreadable state
+does not fabricate an E-stop.
 
 ## Pi installation
 
@@ -141,11 +142,14 @@ motor power.
 ## Operator sequence
 
 1. Enter the operator token in Mission Control.
-2. Confirm **PI AGENT ONLINE** and **E-STOP LATCHED**.
+2. Confirm **PI AGENT ONLINE** and inspect the E-stop badge.
 3. Take the exclusive control lease.
-4. Reset emergency stop and wait for **E-STOP CLEAR**.
+4. If a previous explicit stop remains latched, reset it and wait for
+   **E-STOP CLEAR**.
 5. Click **Enable keyboard**.
-6. Hold or combine the approved keys. The backend and Pi-applied states must
-   agree in the panel.
+6. Hold or combine the approved keys. `W` and `S` drive straight. `A` and `D`
+   take priority over throttle and pivot in place by driving the left and right
+   wheels in opposite directions. The backend and Pi-applied states must agree
+   in the panel.
 7. Use **Release all keys** before leaving the page. Use **Emergency stop** for
    any unexpected behavior.

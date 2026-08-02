@@ -228,10 +228,26 @@ class DriveController:
         if self.emergency_stopped:
             self.stop()
             return
-        throttle = float(KEY_W in pressed) - float(KEY_S in pressed)
-        turn = float(KEY_D in pressed) - float(KEY_A in pressed)
-        left = max(-1.0, min(1.0, throttle + turn)) * self.speed
-        right = max(-1.0, min(1.0, throttle - turn)) * self.speed
+        forward = KEY_W in pressed
+        reverse = KEY_S in pressed
+        pivot_left = KEY_A in pressed
+        pivot_right = KEY_D in pressed
+
+        # Turning is intentionally dominant over throttle. This makes A/D
+        # rotate the chassis around its centre even if W/S is still held.
+        # Conflicting commands always resolve to zero motor output.
+        if (pivot_left and pivot_right) or (forward and reverse):
+            left = right = 0.0
+        elif pivot_left:
+            left, right = -self.speed, self.speed
+        elif pivot_right:
+            left, right = self.speed, -self.speed
+        elif forward:
+            left = right = self.speed
+        elif reverse:
+            left = right = -self.speed
+        else:
+            left = right = 0.0
         self.left.set(left)
         self.right.set(right)
 
@@ -424,6 +440,7 @@ def main() -> int:
     print(
         (
             f"Drive control active at {args.speed:.0%}: W/A/S/D move, "
+            "A/D use in-place pivot turns, "
             "1/2/3 select 30%/60%/100% motor power, "
             "4/5 select 150%/200% speaker volume, Space horn."
         ),

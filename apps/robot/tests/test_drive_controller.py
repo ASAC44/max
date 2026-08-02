@@ -5,6 +5,8 @@ from pathlib import Path
 from max_robot.drive_controller import (
     KEY_2,
     KEY_A,
+    KEY_D,
+    KEY_S,
     KEY_W,
     DriveController,
     find_named_input_device,
@@ -103,6 +105,33 @@ class DriveControllerTests(unittest.TestCase):
         finally:
             controller.close()
         self.assertEqual(gpio.closed, [7])
+
+    def test_turn_keys_dominate_throttle_and_pivot_in_place(self):
+        controller = DriveController(
+            0.60,
+            Path("/missing-horn.mp3"),
+            False,
+            False,
+            gpio=FakeGpio(),
+        )
+        try:
+            controller.apply_keys({KEY_W, KEY_A})
+            self.assertEqual(controller.left.direction, -1)
+            self.assertEqual(controller.right.direction, 1)
+
+            controller.apply_keys({KEY_S, KEY_D})
+            self.assertEqual(controller.left.direction, 1)
+            self.assertEqual(controller.right.direction, -1)
+
+            controller.apply_keys({KEY_A, KEY_D})
+            self.assertEqual(controller.left.direction, 0)
+            self.assertEqual(controller.right.direction, 0)
+
+            controller.apply_keys({KEY_W, KEY_S})
+            self.assertEqual(controller.left.direction, 0)
+            self.assertEqual(controller.right.direction, 0)
+        finally:
+            controller.close()
 
 
 if __name__ == "__main__":
