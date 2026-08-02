@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://max.3-110-105-33.sslip.io/api/:path*" },
     { "source": "/live", "destination": "/index.html" },
     { "source": "/history", "destination": "/index.html" },
     { "source": "/ondc", "destination": "/index.html" },
