@@ -84,6 +84,7 @@ from .schemas import (
     ShoppingIntent,
 )
 from .telegram import (
+    TelegramClient,
     TelegramError,
     enqueue_telegram_update,
     parse_telegram_update,
@@ -582,12 +583,21 @@ async def readiness(session: Session = Depends(get_session)) -> dict:
         telegram_bot_token()
         telegram_owner_user_id()
         telegram_webhook_secret()
-        checks["telegram"] = {"configured": True, "owner_only": True}
     except RuntimeError:
         checks["telegram"] = {
             "configured": False,
+            "connected": False,
             "error": "Telegram owner credentials are not configured",
         }
+    else:
+        try:
+            checks["telegram"] = await TelegramClient().readiness()
+        except TelegramError as exc:
+            checks["telegram"] = {
+                "configured": True,
+                "connected": False,
+                "error": str(exc),
+            }
     for name, operation in {
         "swiggy_mcp": SwiggyClient().readiness,
         "swiggy_browser": SwiggyBrowserCheckout().readiness,

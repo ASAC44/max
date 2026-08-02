@@ -195,7 +195,8 @@ def test_provider_failures_give_a_clear_next_action(reason, expected):
     assert "No checkout or payment was attempted" in text
 
 
-def test_telegram_messages_expose_only_staged_fail_closed_robot_actions():
+def test_telegram_messages_expose_only_staged_fail_closed_robot_actions(monkeypatch):
+    monkeypatch.setenv("MAX_ROBOT_DRY_RUN", "true")
     confirmed = {
         "id": "mission-safe-0001",
         "version": 8,
@@ -259,6 +260,36 @@ def test_telegram_client_uses_bot_api_without_leaking_response(monkeypatch):
     assert captured["path"].endswith("/sendMessage")
     assert captured["body"]["chat_id"] == 42
     assert captured["body"]["text"] == "Safe status"
+
+
+def test_telegram_readiness_requires_bot_and_https_webhook(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456789:safe_test_token_value")
+    webhook = {
+        "url": "https://max.example.com/api/integrations/telegram/webhook",
+        "pending_update_count": 2,
+    }
+
+    async def handler(request: httpx.Request):
+        result = {"is_bot": True} if request.url.path.endswith("/getMe") else webhook
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    client = TelegramClient(httpx.MockTransport(handler))
+    ready = asyncio.run(client.readiness())
+    assert ready == {
+        "configured": True,
+        "connected": True,
+        "api_connected": True,
+        "owner_only": True,
+        "webhook_configured": True,
+        "webhook_error": False,
+        "pending_update_count": 2,
+    }
+
+    webhook["url"] = ""
+    blocked = asyncio.run(client.readiness())
+    assert blocked["api_connected"] is True
+    assert blocked["webhook_configured"] is False
+    assert blocked["connected"] is False
 
 
 def test_control_api_surfaces_safe_provider_error(monkeypatch):
@@ -409,3 +440,59 @@ def test_payment_approval_advances_without_auto_checkout(monkeypatch):
     assert calls[0][2]["expected_version"] == 4
     assert notifications == [(ready, 42, "payment_ready")]
     assert all(not path.endswith("/commands/execute-checkout") for _, path, _ in calls)
+
+
+def test_payment_decline_is_sent_to_owner(monkeypatch):
+    worker = TelegramWorker.__new__(TelegramWorker)
+    worker.owner_chat_id = 42
+    awaiting = {
+        "id": "mission-safe-0001",
+        "version": 4,
+        "phase": "PAYMENT_APPROVAL_REQUIRED",
+    }
+    declined = {**awaiting, "version": 5, "phase": "PAYMENT_DECLINED"}
+    notifications = []
+
+    async def request(_method, _path, *, json=None, headers=None):
+        return declined
+
+    async def notify(mission, chat_id, kind):
+        notifications.append((mission, chat_id, kind))
+        return True
+
+    worker._active = lambda: asyncio.sleep(0, result=awaiting)
+    worker.control = type("Control", (), {"request": staticmethod(request)})()
+    worker._send_reserved_notification = notify
+
+    asyncio.run(worker.advance_payment())
+    assert notifications == [(declined, 42, "payment_result")]
+
+
+def test_pending_prava_result_is_reported_and_notified():
+    worker = TelegramWorker.__new__(TelegramWorker)
+    worker.owner_chat_id = 42
+    pending = {
+        "id": "mission-safe-0001",
+        "version": 7,
+        "phase": "PAYMENT_RESULT_REPORT_REQUIRED",
+    }
+    confirmed = {**pending, "version": 8, "phase": "ORDER_CONFIRMED"}
+    calls = []
+    notifications = []
+
+    async def request(method, path, *, json=None, headers=None):
+        calls.append((method, path, json))
+        return confirmed
+
+    async def notify(mission, chat_id, kind):
+        notifications.append((mission, chat_id, kind))
+        return True
+
+    worker._active = lambda: asyncio.sleep(0, result=pending)
+    worker.control = type("Control", (), {"request": staticmethod(request)})()
+    worker._send_reserved_notification = notify
+
+    asyncio.run(worker.advance_payment())
+    assert calls[0][1].endswith("/commands/report-payment-result")
+    assert calls[0][2]["expected_version"] == 7
+    assert notifications == [(confirmed, 42, "checkout")]

@@ -4,6 +4,7 @@ import asyncio
 import hmac
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import delete, select, update
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .config import (
     admin_token,
+    robot_dry_run,
     telegram_auto_checkout,
     telegram_bot_token,
     telegram_control_api_url,
@@ -153,6 +155,37 @@ class TelegramClient:
             {"callback_query_id": callback_query_id, "text": text[:200]},
         )
 
+    async def readiness(self) -> dict[str, Any]:
+        me = (await self._call("getMe", {})).get("result")
+        webhook = (await self._call("getWebhookInfo", {})).get("result")
+        if not isinstance(me, dict) or not isinstance(webhook, dict):
+            raise TelegramError("Telegram readiness response was invalid")
+        webhook_url = webhook.get("url", "")
+        if not isinstance(webhook_url, str):
+            webhook_url = ""
+        parsed = urlparse(webhook_url)
+        webhook_configured = (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.path.endswith("/api/integrations/telegram/webhook")
+        )
+        connected = bool(me.get("is_bot")) and webhook_configured and not webhook.get(
+            "last_error_message"
+        )
+        return {
+            "configured": True,
+            "connected": connected,
+            "api_connected": bool(me.get("is_bot")),
+            "owner_only": True,
+            "webhook_configured": webhook_configured,
+            "webhook_error": bool(webhook.get("last_error_message")),
+            "pending_update_count": (
+                webhook["pending_update_count"]
+                if isinstance(webhook.get("pending_update_count"), int)
+                else 0
+            ),
+        }
+
 
 class ControlApiClient:
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
@@ -271,6 +304,9 @@ def mission_message(mission: dict[str, Any]) -> tuple[str, dict[str, Any] | None
     phase = mission["phase"]
     mission_id = mission["id"]
     version = mission["version"]
+    job_status = mission.get("robot_job", {}).get("status")
+    if job_status == "CANCEL_REQUESTED":
+        return "Swiggy cancelled the order; the robot is stopping now.", None
     if phase == "NEEDS_CLARIFICATION":
         return (
             "I need a little more information before I can check Swiggy:\n\n"
@@ -350,9 +386,20 @@ def mission_message(mission: dict[str, Any]) -> tuple[str, dict[str, Any] | None
     if phase == "READY_TO_DISPATCH":
         if mission.get("robot_job"):
             job = mission["robot_job"]
+            mode = (
+                "Motor motion remains disabled."
+                if job.get("dry_run", True)
+                else "Autonomous navigation is armed by the verified arrival event."
+            )
             return (
                 f"Pi job {job['status'].lower()} from {job['trigger_source'].lower()} "
-                f"status {job['trigger_status']}. Motor motion remains disabled.",
+                f"status {job['trigger_status']}. {mode}",
+                None,
+            )
+        if not robot_dry_run():
+            return (
+                "Package-ready gate recorded. Autonomous dispatch waits for the "
+                "verified Swiggy arrival event; manual motion is blocked.",
                 None,
             )
         return (
@@ -364,15 +411,41 @@ def mission_message(mission: dict[str, Any]) -> tuple[str, dict[str, Any] | None
                 }]]
             },
         )
+    dry_run = mission.get("robot_job", {}).get("dry_run", True)
+    if phase == "EN_ROUTE_TO_PICKUP":
+        return "Robot navigation started toward the delivery pickup point.", None
     if phase == "AT_PICKUP":
-        return "Pi rehearsal reached the pickup checkpoint; motors remained disabled.", None
+        return (
+            "Pi rehearsal reached the pickup checkpoint; motors remained disabled."
+            if dry_run
+            else "Robot reached the delivery pickup point and is waiting for item-secured confirmation.",
+            None,
+        )
     if phase == "ITEM_SECURED":
-        return "Staged item-secured checkpoint recorded; motors remained disabled.", None
+        return (
+            "Staged item-secured checkpoint recorded; motors remained disabled."
+            if dry_run
+            else "Item-secured confirmation received; return navigation is starting.",
+            None,
+        )
     if phase == "RETURNING":
-        return "Pi rehearsal entered the return checkpoint; motors remained disabled.", None
+        return (
+            "Pi rehearsal entered the return checkpoint; motors remained disabled."
+            if dry_run
+            else "Robot is returning with the item.",
+            None,
+        )
     if phase == "COMPLETED":
-        return "Staged pickup-and-return rehearsal completed with physical motion disabled.", None
+        return (
+            "Staged pickup-and-return rehearsal completed with physical motion disabled."
+            if dry_run
+            else "Autonomous pickup-and-return completed.",
+            None,
+        )
     if phase in {"CANCELLED", "CLOSED_UNRESOLVED", "CHECKOUT_OUTCOME_UNKNOWN"}:
+        job_status = mission.get("robot_job", {}).get("status")
+        if job_status == "CANCELLED":
+            return "Swiggy cancelled the order and the robot confirmed it stopped.", None
         return f"Mission stopped with status: {phase}. No robot dispatch was started.", None
     return f"Mission status: {phase}.", None
 
@@ -638,6 +711,30 @@ class TelegramWorker:
                     "command_id": f"tg-refresh-{mission['id'][:8]}-{mission['version']}",
                 },
             )
+            if mission and mission["phase"] == "PAYMENT_DECLINED":
+                if self.owner_chat_id:
+                    await self._send_reserved_notification(
+                        mission,
+                        self.owner_chat_id,
+                        "payment_result",
+                    )
+                return
+        if mission and mission["phase"] == "PAYMENT_RESULT_REPORT_REQUIRED":
+            mission = await self.control.request(
+                "POST",
+                f"/api/missions/{mission['id']}/commands/report-payment-result",
+                json={
+                    "expected_version": mission["version"],
+                    "command_id": f"tg-report-{mission['id'][:8]}-{mission['version']}",
+                },
+            )
+            if mission and self.owner_chat_id:
+                await self._send_reserved_notification(
+                    mission,
+                    self.owner_chat_id,
+                    "checkout",
+                )
+            return
         if mission and mission["phase"] == "PAYMENT_PERMISSION_READY":
             if self.owner_chat_id:
                 await self._send_reserved_notification(
@@ -671,7 +768,14 @@ class TelegramWorker:
                 .where(
                     Mission.environment == "staged_demo",
                     Mission.phase.in_(
-                        ("AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED")
+                        (
+                            "EN_ROUTE_TO_PICKUP",
+                            "AT_PICKUP",
+                            "ITEM_SECURED",
+                            "RETURNING",
+                            "COMPLETED",
+                            "CANCELLED",
+                        )
                     ),
                 )
                 .order_by(Mission.updated_at.desc())
