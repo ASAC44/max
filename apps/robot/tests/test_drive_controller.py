@@ -7,9 +7,12 @@ from max_robot.drive_controller import (
     KEY_A,
     KEY_D,
     KEY_S,
+    KEY_SPACE,
     KEY_W,
     DriveController,
+    detach_keyboard,
     find_named_input_device,
+    handle_device_key_event,
     handle_key_event,
 )
 
@@ -130,6 +133,40 @@ class DriveControllerTests(unittest.TestCase):
             controller.apply_keys({KEY_W, KEY_S})
             self.assertEqual(controller.left.direction, 0)
             self.assertEqual(controller.right.direction, 0)
+        finally:
+            controller.close()
+
+    def test_virtual_and_physical_keyboards_keep_independent_held_state(self):
+        controller = DriveController(
+            0.30,
+            Path("/missing-horn.mp3"),
+            False,
+            False,
+            gpio=FakeGpio(),
+        )
+        states = {"virtual": set(), "physical": set()}
+        horn_events = []
+        controller.start_horn = lambda: horn_events.append("start")
+        controller.stop_horn = lambda: horn_events.append("stop")
+        try:
+            handle_device_key_event(controller, states, "virtual", KEY_W, 1)
+            self.assertEqual((controller.left.direction, controller.right.direction), (1, 1))
+
+            handle_device_key_event(controller, states, "physical", KEY_A, 1)
+            self.assertEqual((controller.left.direction, controller.right.direction), (-1, 1))
+
+            handle_device_key_event(controller, states, "physical", KEY_A, 0)
+            self.assertEqual((controller.left.direction, controller.right.direction), (1, 1))
+
+            handle_device_key_event(controller, states, "virtual", KEY_SPACE, 1)
+            handle_device_key_event(controller, states, "physical", KEY_SPACE, 1)
+            handle_device_key_event(controller, states, "virtual", KEY_SPACE, 0)
+            self.assertEqual(horn_events, ["start"])
+            handle_device_key_event(controller, states, "physical", KEY_SPACE, 0)
+            self.assertEqual(horn_events, ["start", "stop"])
+
+            detach_keyboard(controller, states, "virtual")
+            self.assertEqual((controller.left.direction, controller.right.direction), (0, 0))
         finally:
             controller.close()
 

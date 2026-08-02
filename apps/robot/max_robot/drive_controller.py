@@ -52,6 +52,8 @@ VOLUME_MODES = {
     KEY_5: 2.00,
     KEY_KP5: 2.00,
 }
+MOVEMENT_KEYS = {KEY_W, KEY_A, KEY_S, KEY_D}
+HELD_KEYS = MOVEMENT_KEYS | {KEY_SPACE}
 
 # Established BCM pin contract for the two installed BTS7960 boards.
 LEFT_PINS = {
@@ -279,6 +281,81 @@ def find_keyboard(device_name: str, allow_physical: bool) -> str | None:
     return None
 
 
+def find_keyboards(device_name: str, allow_physical: bool) -> list[str]:
+    """Return every permitted keyboard without duplicating one event device."""
+    candidates: list[str] = []
+    if virtual := find_named_input_device(device_name):
+        candidates.append(virtual)
+    if allow_physical:
+        candidates.extend(sorted(glob.glob("/dev/input/by-id/*-event-kbd")))
+    devices: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = os.path.realpath(candidate)
+        if resolved not in seen and os.path.exists(resolved):
+            seen.add(resolved)
+            devices.append(resolved)
+    return devices
+
+
+def _combined_pressed(device_states: dict[str, set[int]]) -> set[int]:
+    combined: set[int] = set()
+    for pressed in device_states.values():
+        combined.update(pressed)
+    return combined
+
+
+def handle_device_key_event(
+    controller: DriveController,
+    device_states: dict[str, set[int]],
+    device: str,
+    code: int,
+    value: int,
+) -> None:
+    """Apply one event while keeping independent held state per keyboard."""
+    before = _combined_pressed(device_states)
+    if code == KEY_ESC and value == 1:
+        for pressed in device_states.values():
+            pressed.clear()
+        handle_key_event(controller, set(), code, value)
+        return
+    if code == KEY_R and value == 1:
+        for pressed in device_states.values():
+            pressed.clear()
+        handle_key_event(controller, set(), code, value)
+        return
+    if code in HELD_KEYS:
+        pressed = device_states.setdefault(device, set())
+        if value == 0:
+            pressed.discard(code)
+        elif value == 1:
+            pressed.add(code)
+        after = _combined_pressed(device_states)
+        if code == KEY_SPACE:
+            if KEY_SPACE not in before and KEY_SPACE in after:
+                controller.start_horn()
+            elif KEY_SPACE in before and KEY_SPACE not in after:
+                controller.stop_horn()
+        if code in MOVEMENT_KEYS:
+            controller.apply_keys(after)
+        return
+    handle_key_event(controller, before, code, value)
+
+
+def detach_keyboard(
+    controller: DriveController,
+    device_states: dict[str, set[int]],
+    device: str,
+) -> None:
+    before = _combined_pressed(device_states)
+    device_states.pop(device, None)
+    after = _combined_pressed(device_states)
+    if before & MOVEMENT_KEYS != after & MOVEMENT_KEYS:
+        controller.apply_keys(after)
+    if KEY_SPACE in before and KEY_SPACE not in after:
+        controller.stop_horn()
+
+
 def handle_key_event(
     controller: DriveController,
     pressed: set[int],
@@ -313,7 +390,7 @@ def handle_key_event(
     if code in VOLUME_MODES and value == 1:
         controller.set_volume(VOLUME_MODES[code])
         return
-    if code not in {KEY_W, KEY_A, KEY_S, KEY_D}:
+    if code not in MOVEMENT_KEYS:
         return
     if value == 0:
         pressed.discard(code)
@@ -328,49 +405,88 @@ def keyboard_loop(
     device_name: str,
     allow_physical: bool,
 ) -> None:
-    pressed: set[int] = set()
-    while controller.running:
-        keyboard = find_keyboard(device_name, allow_physical)
-        if not keyboard:
-            controller.stop()
-            controller.stop_horn()
-            print(
-                f"Input device {device_name!r} not found; motors disabled. Retrying.",
-                flush=True,
-            )
-            time.sleep(1)
-            continue
-        print(f"Keyboard ready: {keyboard} ({device_name})", flush=True)
+    poller = select.poll()
+    paths_by_fd: dict[int, str] = {}
+    device_states: dict[str, set[int]] = {}
+    next_scan = 0.0
+
+    def remove_fd(fd: int, reason: str) -> None:
+        device = paths_by_fd.pop(fd, None)
+        if device is None:
+            return
         try:
-            fd = os.open(keyboard, os.O_RDONLY | os.O_NONBLOCK)
-        except OSError as exc:
-            print(f"Cannot open keyboard: {type(exc).__name__}", flush=True)
-            time.sleep(1)
-            continue
-        poller = select.poll()
-        poller.register(fd, select.POLLIN | select.POLLERR | select.POLLHUP)
+            poller.unregister(fd)
+        except (KeyError, OSError):
+            pass
         try:
-            while controller.running:
-                events = poller.poll(500)
-                if not events:
+            os.close(fd)
+        except OSError:
+            pass
+        detach_keyboard(controller, device_states, device)
+        print(f"Keyboard unavailable: {device} ({reason}).", flush=True)
+
+    try:
+        while controller.running:
+            now = time.monotonic()
+            if now >= next_scan:
+                discovered = set(find_keyboards(device_name, allow_physical))
+                connected = set(paths_by_fd.values())
+                for missing in connected - discovered:
+                    fd = next(
+                        candidate
+                        for candidate, path in paths_by_fd.items()
+                        if path == missing
+                    )
+                    remove_fd(fd, "disconnected")
+                for device in sorted(discovered - connected):
+                    try:
+                        fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+                    except OSError as exc:
+                        print(
+                            f"Cannot open keyboard {device}: {type(exc).__name__}",
+                            flush=True,
+                        )
+                        continue
+                    poller.register(fd, select.POLLIN | select.POLLERR | select.POLLHUP)
+                    paths_by_fd[fd] = device
+                    device_states[device] = set()
+                    print(f"Keyboard ready: {device}", flush=True)
+                if not paths_by_fd:
+                    controller.stop()
+                    controller.stop_horn()
+                    print("No permitted keyboard found; motors disabled.", flush=True)
+                next_scan = now + 1.0
+
+            for fd, flags in poller.poll(250):
+                if flags & (select.POLLERR | select.POLLHUP):
+                    remove_fd(fd, "poll error")
                     continue
-                data = os.read(fd, EVENT.size * 32)
+                device = paths_by_fd.get(fd)
+                if device is None:
+                    continue
+                try:
+                    data = os.read(fd, EVENT.size * 32)
+                except OSError as exc:
+                    remove_fd(fd, type(exc).__name__)
+                    continue
                 if not data:
-                    raise OSError("keyboard disconnected")
+                    remove_fd(fd, "end of input")
+                    continue
                 for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
                     _, _, event_type, code, value = EVENT.unpack_from(data, offset)
                     if event_type == EV_KEY:
-                        handle_key_event(controller, pressed, code, value)
-        except OSError as exc:
-            controller.stop()
-            controller.stop_horn()
-            pressed.clear()
-            print(
-                f"Keyboard unavailable ({type(exc).__name__}); motors disabled.",
-                flush=True,
-            )
-        finally:
-            os.close(fd)
+                        handle_device_key_event(
+                            controller,
+                            device_states,
+                            device,
+                            code,
+                            value,
+                        )
+    finally:
+        for fd in list(paths_by_fd):
+            remove_fd(fd, "controller shutdown")
+        controller.stop()
+        controller.stop_horn()
 
 
 def _environment_bool(name: str, default: str = "false") -> bool:

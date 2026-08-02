@@ -113,7 +113,7 @@ MAX_ROBOT_ID=max-pi
 MAX_TELEOP_INPUT_ENABLED=true
 MAX_TELEOP_UINPUT_DEVICE=/dev/uinput
 MAX_TELEOP_INPUT_DEVICE_NAME=Max Remote Teleop
-MAX_DRIVE_PHYSICAL_KEYBOARD_FALLBACK=false
+MAX_DRIVE_ALLOW_PHYSICAL_KEYBOARD=true
 ```
 
 The root installer loads the `uinput` kernel module, creates a narrowly scoped
@@ -136,8 +136,9 @@ grep -A5 -B2 "Max Remote Teleop" /proc/bus/input/devices
 
 Use the dashboard only with the drive wheels raised for the first physical
 direction, hold, release, network-loss, and emergency-stop test. Confirm the
-local keyboard-control process observes the virtual device before applying
-motor power.
+local keyboard-control process observes both the virtual device and the 2.4 GHz
+keyboard receiver before applying motor power. The controller tracks held keys
+per device; disconnecting either source releases only that source's keys.
 
 ## Operator sequence
 
