@@ -97,7 +97,7 @@ class ControlHandler(BaseHTTPRequestHandler):
     def _run(self, action: str) -> None:
         manager = self.server.manager
         if action == "start":
-            manager.start()
+            manager.start(mission_id=self.headers.get("X-Mission-Id") or None)
         elif action == "stop":
             manager.pause()
         elif action == "resume":

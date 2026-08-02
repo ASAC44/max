@@ -291,4 +291,45 @@ def telegram_worker_interval_seconds() -> float:
         raise RuntimeError("MAX_TELEGRAM_WORKER_INTERVAL_SECONDS must be a number") from exc
     if not 1 <= value <= 60:
         raise RuntimeError("MAX_TELEGRAM_WORKER_INTERVAL_SECONDS must be between 1 and 60")
+
+
+def robot_base_url() -> str:
+    value = os.getenv("MAX_ROBOT_BASE_URL", "").rstrip("/")
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    host = parsed.hostname or ""
+    try:
+        local = ip_address(host).is_private or ip_address(host).is_loopback
+    except ValueError:
+        local = host == "localhost"
+    if parsed.scheme != "http" or not local:
+        raise RuntimeError("MAX_ROBOT_BASE_URL must be loopback or private-LAN HTTP")
+    return value
+
+
+def robot_operator_pin() -> str:
+    value = os.getenv("MAX_ROBOT_OPERATOR_PIN", "")
+    if len(value) < 4:
+        raise RuntimeError("MAX_ROBOT_OPERATOR_PIN must contain at least four characters")
+    return value
+
+
+def robot_outbound_seconds() -> float:
+    try:
+        value = float(os.getenv("MAX_ROBOT_OUTBOUND_SECONDS", "30"))
+    except ValueError as exc:
+        raise RuntimeError("MAX_ROBOT_OUTBOUND_SECONDS must be a number") from exc
+    if not 1 <= value <= 3600:
+        raise RuntimeError("MAX_ROBOT_OUTBOUND_SECONDS must be between 1 and 3600")
+    return value
+
+
+def dispatch_buffer_seconds() -> float:
+    try:
+        value = float(os.getenv("MAX_DISPATCH_BUFFER_SECONDS", "60"))
+    except ValueError as exc:
+        raise RuntimeError("MAX_DISPATCH_BUFFER_SECONDS must be a number") from exc
+    if not 0 <= value <= 900:
+        raise RuntimeError("MAX_DISPATCH_BUFFER_SECONDS must be between 0 and 900")
     return value

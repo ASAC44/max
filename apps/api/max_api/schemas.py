@@ -162,6 +162,12 @@ class RobotLifecycleReport(BaseModel):
     motion_started: Literal[False]
 
 
+class BindOrderCommand(CommandBase):
+    order_id: str = Field(min_length=1, max_length=128)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
 class EventView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -227,6 +233,17 @@ class PaymentActionView(BaseModel):
     expires_at: datetime
 
 
+class DeliveryView(BaseModel):
+    order_reference: str | None = None
+    status: str = "NOT_TRACKING"
+    eta_at: datetime | None = None
+    dispatch_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    armed: bool = False
+    robot_status: str = "NOT_STARTED"
+    alert: str | None = None
+
+
 class MissionView(BaseModel):
     id: str
     parent_mission_id: str | None
@@ -253,3 +270,4 @@ class MissionView(BaseModel):
     payment_action: PaymentActionView | None = None
     robot_job: RobotJobView | None = None
     source_order_events: list[EventView] = Field(default_factory=list)
+    delivery: DeliveryView | None = None

@@ -30,6 +30,12 @@ obstruction experiments, supervised manual motor tests, and emergency stopping
 may be validated, but autonomous route execution must remain disabled until a
 measured odometry source is added. Timed PWM is not an odometry substitute.
 
+Two motors and two BTS7960 bridges are supported by `max-motors`. Each motor
+needs four distinct BCM GPIO assignments. The shipped configuration uses `-1`
+for every pin and therefore fails closed until a private hardware YAML is
+provided. The driver caps duty at 25%, stops after 250 ms without `/cmd_vel`,
+and disables both bridges on shutdown.
+
 ## Architecture
 
 ```text
@@ -141,6 +147,31 @@ ros2 launch max_robot navigation.launch.py \
   database:=/tmp/max_rtabmap.db \
   reference_dir:="$PWD/references"
 ```
+
+On Raspberry Pi 5 with Camera Module 3, use Ubuntu 26.04 arm64 and ROS 2
+Lyrical, verify `rpicam-hello --list-cameras` reports `imx708`, install
+`camera_ros` with Raspberry Pi's libcamera fork, calibrate the mounted camera,
+then launch the physical stack with a private motor configuration:
+
+```bash
+ros2 launch max_robot hardware.launch.py \
+  database:=/tmp/max_rtabmap.db \
+  reference_dir:="$PWD/references" \
+  motor_config:=/path/to/private-motors.yaml
+```
+
+Do the first motor-direction test with the wheels raised. Autonomous start is
+still rejected until measured `/wheel/odom`, localization, camera, obstruction,
+and controller heartbeats are healthy.
+
+With the physical stack running, verify the minimum camera/odometry contract:
+
+```bash
+ros2 run max_robot max-hardware-check --seconds 30
+```
+
+It exits non-zero unless the rectified camera sustains at least 15 fps, camera
+intrinsics are calibrated, and measured wheel odometry is present.
 
 Open `http://<workstation-ip>:8080` from the phone on the same trusted local
 network. The prototype UI does not provide TLS. Start is rejected until

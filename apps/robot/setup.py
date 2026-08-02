@@ -17,7 +17,13 @@ setup(
         ("share/max_robot/references", glob("references/*")),
         ("share/max_robot/worlds", glob("worlds/*")),
     ],
-    install_requires=["setuptools", "numpy", "websockets>=16,<17"],
+    install_requires=[
+        "setuptools",
+        "numpy",
+        "websockets>=16,<17",
+        "gpiozero>=2",
+        "lgpio>=0.2.2.0",
+    ],
     zip_safe=True,
     entry_points={
         "console_scripts": [
@@ -31,6 +37,8 @@ setup(
             "max-agent = max_robot.agent:main",
             "max-teleop-agent = max_robot.teleop_agent:main",
             "max-drive-controller = max_robot.drive_controller:main",
+            "max-motors = max_robot.motor_node:main",
+            "max-hardware-check = max_robot.hardware_check:main",
         ]
     },
 )

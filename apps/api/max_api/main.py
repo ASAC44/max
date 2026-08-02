@@ -2,8 +2,9 @@ import asyncio
 import hmac
 import os
 from contextlib import asynccontextmanager
-from datetime import timezone
+from datetime import timedelta, timezone
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -16,11 +17,15 @@ from .config import (
     admin_token,
     agent_mode,
     commerce_mode,
+    dispatch_buffer_seconds,
     payment_mode,
     purchase_enabled,
+    robot_base_url,
     robot_dry_run,
     robot_heartbeat_stale_seconds,
     robot_mode,
+    robot_operator_pin,
+    robot_outbound_seconds,
     robot_token,
     runtime_environment,
     teleop_agent_idle_seconds,
@@ -43,6 +48,7 @@ from .integrations import (
     SwiggyBrowserCheckout,
     SwiggyClient,
     SwiggyConnectionError,
+    SwiggyOrder,
 )
 from .models import Event, ExternalAttempt, Mission, RobotJob, utcnow
 from .order_sync import order_sync_worker_readiness
@@ -59,6 +65,7 @@ from .schemas import (
     ApprovalView,
     ApproveCommand,
     AttemptView,
+    BindOrderCommand,
     CheckoutView,
     CommandBase,
     MissionCreate,
@@ -87,9 +94,11 @@ from .teleop import (
 )
 from .workflow import (
     WorkflowError,
+    arm_delivery_dispatch,
     abort_checkout_attempt,
     apply_intent,
     approve_quote,
+    bind_delivery_order,
     cancel,
     command_failed,
     close_unresolved,
@@ -103,6 +112,8 @@ from .workflow import (
     record_prava_final_state,
     record_prava_session,
     record_robot_dispatch_acknowledgement,
+    record_robot_dispatched,
+    record_robot_progress,
     recover_in_progress_attempts,
     requote,
     run_robot_simulation,
@@ -122,6 +133,7 @@ teleop_hub = TeleopHub(
     controller_idle_seconds=teleop_controller_idle_seconds(),
     agent_idle_seconds=teleop_agent_idle_seconds(),
 )
+dispatch_lock = asyncio.Lock()
 
 
 async def swiggy_quote_with_transport_retry(intent: ShoppingIntent) -> Quote:
@@ -240,7 +252,144 @@ def mission_view(session: Session, mission: Mission) -> MissionView:
         payment_action=payment_action,
         robot_job=RobotJobView.model_validate(robot_job) if robot_job else None,
         source_order_events=source_order_events,
+        delivery=mission.delivery,
     )
+
+
+async def delivery_tick(swiggy: SwiggyClient) -> None:
+    with SessionLocal() as session:
+        mission = session.scalar(select(Mission).where(
+            Mission.active_slot == "active",
+            Mission.phase.in_(("ORDER_CONFIRMED", "EN_ROUTE_TO_PICKUP", "AT_PICKUP", "ITEM_SECURED", "RETURNING")),
+        ))
+        if not mission or not mission.delivery or not mission.delivery.get("order_id"):
+            return
+        delivery = dict(mission.delivery)
+
+        if mission.phase != "ORDER_CONFIRMED":
+            try:
+                base_url = robot_base_url()
+                if not base_url:
+                    return
+                async with httpx.AsyncClient(timeout=3) as client:
+                    response = await client.get(f"{base_url}/api/status")
+                    response.raise_for_status()
+                    robot = response.json()
+                if robot.get("mission_id") != mission.id:
+                    raise RuntimeError("Robot mission identity does not match the active mission")
+                record_robot_progress(session, mission, str(robot.get("mission", "UNKNOWN")))
+            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                delivery["alert"] = str(exc)
+                mission.delivery = delivery
+                session.commit()
+            return
+
+        order = SwiggyOrder(
+            delivery["order_id"], float(delivery["latitude"]), float(delivery["longitude"])
+        )
+        try:
+            tracked = await swiggy.track_order(order)
+            now = utcnow()
+            dispatch_at = tracked.eta_at - timedelta(
+                seconds=robot_outbound_seconds() + dispatch_buffer_seconds()
+            )
+        except (IntegrationError, RuntimeError, ValueError) as exc:
+            delivery["alert"] = str(exc)
+            mission.delivery = delivery
+            session.commit()
+            return
+
+        session.refresh(mission)
+        if mission.phase != "ORDER_CONFIRMED" or not mission.delivery:
+            return
+        delivery = {
+            **mission.delivery,
+            "status": tracked.status,
+            "eta_at": tracked.eta_at.isoformat(),
+            "dispatch_at": dispatch_at.isoformat(),
+            "last_checked_at": now.isoformat(),
+            "alert": (
+                mission.delivery.get("alert")
+                if mission.delivery.get("robot_status") == "START_UNKNOWN"
+                else None
+            ),
+        }
+        mission.delivery = delivery
+        session.commit()
+        if (
+            not delivery.get("armed")
+            or delivery.get("robot_status") != "NOT_STARTED"
+            or tracked.status in {"CANCELLED", "CANCELED", "DELIVERED", "FAILED"}
+            or now < dispatch_at
+        ):
+            return
+
+        try:
+            base_url = robot_base_url()
+            if not base_url:
+                return
+        except RuntimeError as exc:
+            delivery["alert"] = str(exc)
+            mission.delivery = delivery
+            session.commit()
+            return
+
+        submitted = False
+        try:
+            async with dispatch_lock:
+                session.refresh(mission)
+                if (
+                    mission.phase != "ORDER_CONFIRMED"
+                    or not mission.delivery
+                    or not mission.delivery.get("armed")
+                    or mission.delivery.get("robot_status") != "NOT_STARTED"
+                ):
+                    return
+                async with httpx.AsyncClient(timeout=3) as client:
+                    response = await client.get(f"{base_url}/api/status")
+                    response.raise_for_status()
+                    robot = response.json()
+                    if robot.get("mission_id") == mission.id and robot.get("mission") == "OUTBOUND":
+                        record_robot_dispatched(session, mission, f"dispatch-{mission.id}-{mission.version}")
+                        return
+                    if robot.get("safety_reasons"):
+                        raise RuntimeError("; ".join(robot["safety_reasons"]))
+                    if robot.get("mission") not in {"IDLE", "COMPLETE", "CANCELLED"}:
+                        raise RuntimeError("Robot is already busy")
+                    submitted = True
+                    response = await client.post(
+                        f"{base_url}/api/mission/start",
+                        headers={"X-Operator-Pin": robot_operator_pin(), "X-Mission-Id": mission.id},
+                    )
+                    response.raise_for_status()
+                record_robot_dispatched(session, mission, f"dispatch-{mission.id}-{mission.version}")
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            if submitted:
+                delivery["robot_status"] = "START_UNKNOWN"
+                delivery["alert"] = "Robot start outcome is unknown; inspect locally and do not retry"
+            else:
+                delivery["alert"] = str(exc)
+            mission.delivery = delivery
+            session.commit()
+        except RuntimeError as exc:
+            delivery["alert"] = str(exc)
+            mission.delivery = delivery
+            session.commit()
+
+
+async def delivery_loop() -> None:
+    if commerce_mode() != "swiggy":
+        return
+    while True:
+        try:
+            swiggy = SwiggyClient()
+            await delivery_tick(swiggy)
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # ponytail: one user/session; add per-user sessions only when Max becomes multi-user.
+            await asyncio.sleep(30)
 
 
 @asynccontextmanager
@@ -248,9 +397,12 @@ async def lifespan(_app: FastAPI):
     with SessionLocal() as session:
         recover_in_progress_attempts(session)
     await teleop_hub.start()
+    delivery_task = asyncio.create_task(delivery_loop())
     try:
         yield
     finally:
+        delivery_task.cancel()
+        await asyncio.gather(delivery_task, return_exceptions=True)
         await teleop_hub.stop()
 
 
@@ -672,6 +824,32 @@ async def start_live_prava_approval(session: Session, mission: Mission, command_
     )
 
 
+async def start_delivery_tracking(session: Session, mission: Mission, command_id: str) -> Mission:
+    if mission.phase != "ORDER_CONFIRMED":
+        return mission
+    try:
+        order = await SwiggyClient().resolve_active_order(Quote.model_validate(mission.quote))
+    except IntegrationError as exc:
+        mission.delivery = {
+            "order_reference": None,
+            "status": "BIND_REQUIRED",
+            "armed": False,
+            "robot_status": "NOT_STARTED",
+            "alert": str(exc),
+        }
+        session.commit()
+        return mission
+    return bind_delivery_order(
+        session,
+        mission.id,
+        mission.version,
+        f"{command_id}-bind-order",
+        order.order_id,
+        order.latitude,
+        order.longitude,
+    )
+
+
 @app.post("/api/missions", response_model=MissionView, dependencies=[Depends(require_admin)])
 async def create(
     body: MissionCreate,
@@ -1004,6 +1182,7 @@ async def execute_checkout(mission_id: str, body: CommandBase, session: Session 
             attempt.id,
             final_state.status,
         )
+        mission = await start_delivery_tracking(session, mission, body.command_id)
         return mission_view(session, mission)
 
 
@@ -1050,6 +1229,7 @@ async def report_payment_result(mission_id: str, body: CommandBase, session: Ses
         mission = record_prava_final_state(
             session, mission_id, mission.version, body.command_id, attempt.id, state.status
         )
+        mission = await start_delivery_tracking(session, mission, body.command_id)
         return mission_view(session, mission)
 
 
@@ -1060,33 +1240,51 @@ async def change_quote(mission_id: str, body: RequoteCommand, session: Session =
 
 @app.post("/api/missions/{mission_id}/commands/cancel", response_model=MissionView, dependencies=[Depends(require_admin)])
 async def cancel_mission(mission_id: str, body: CommandBase, session: Session = Depends(get_session)):
-    mission = session.get(Mission, mission_id)
-    if not mission:
-        raise HTTPException(status_code=404, detail="mission not found")
-    existing = session.scalar(select(Event).where(
-        Event.mission_id == mission_id,
-        Event.command_id == body.command_id,
-    ))
-    revocation: str | None = None
-    if not existing and mission.phase in {"PAYMENT_APPROVAL_REQUIRED", "PAYMENT_PERMISSION_READY"}:
-        prava_event = prava_session_event(session, mission_id)
-        if prava_event:
-            try:
-                await PravaClient().revoke_session(prava_event.payload["session_id"])
-                revocation = "confirmed"
-            except (IntegrationError, KeyError):
-                # Local cancellation must still win so no worker can use a
-                # credential even when the external revocation is unavailable.
-                revocation = "failed"
+    async with dispatch_lock:
+        mission = session.get(Mission, mission_id)
+        if not mission:
+            raise HTTPException(status_code=404, detail="mission not found")
+        existing = session.scalar(select(Event).where(
+            Event.mission_id == mission_id,
+            Event.command_id == body.command_id,
+        ))
+        revocation: str | None = None
+        if not existing and mission.phase in {"PAYMENT_APPROVAL_REQUIRED", "PAYMENT_PERMISSION_READY"}:
+            prava_event = prava_session_event(session, mission_id)
+            if prava_event:
+                try:
+                    await PravaClient().revoke_session(prava_event.payload["session_id"])
+                    revocation = "confirmed"
+                except (IntegrationError, KeyError):
+                    # Local cancellation must still win so no worker can use a
+                    # credential even when external revocation is unavailable.
+                    revocation = "failed"
+        return mission_view(
+            session,
+            cancel(
+                session,
+                mission_id,
+                body.expected_version,
+                body.command_id,
+                prava_revocation=revocation,
+            ),
+        )
+
+
+@app.post("/api/missions/{mission_id}/commands/bind-order", response_model=MissionView, dependencies=[Depends(require_admin)])
+async def bind_order(mission_id: str, body: BindOrderCommand, session: Session = Depends(get_session)):
+    mission = bind_delivery_order(
+        session, mission_id, body.expected_version, body.command_id,
+        body.order_id, body.latitude, body.longitude,
+    )
+    return mission_view(session, mission)
+
+
+@app.post("/api/missions/{mission_id}/commands/arm-dispatch", response_model=MissionView, dependencies=[Depends(require_admin)])
+async def arm_dispatch(mission_id: str, body: CommandBase, session: Session = Depends(get_session)):
     return mission_view(
         session,
-        cancel(
-            session,
-            mission_id,
-            body.expected_version,
-            body.command_id,
-            prava_revocation=revocation,
-        ),
+        arm_delivery_dispatch(session, mission_id, body.expected_version, body.command_id),
     )
 
 

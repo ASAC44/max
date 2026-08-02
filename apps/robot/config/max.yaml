@@ -12,3 +12,20 @@ max_obstruction:
     minimum_tracks: 30
     confirmation_frames: 3
     clear_seconds: 5.0
+
+# No GPIO defaults: copy this block into a private hardware config after wiring.
+max_motors:
+  ros__parameters:
+    left_rpwm: -1
+    left_lpwm: -1
+    left_r_enable: -1
+    left_l_enable: -1
+    right_rpwm: -1
+    right_lpwm: -1
+    right_r_enable: -1
+    right_l_enable: -1
+    axle_separation: 0.24
+    max_wheel_speed: 0.3
+    max_duty: 0.25
+    left_polarity: 1.0
+    right_polarity: 1.0

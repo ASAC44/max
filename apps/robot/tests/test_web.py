@@ -26,8 +26,10 @@ class WebTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def post(self, action: str, pin: str | None = "1234") -> tuple[int, dict]:
+    def post(self, action: str, pin: str | None = "1234", mission_id: str | None = None) -> tuple[int, dict]:
         headers = {} if pin is None else {"X-Operator-Pin": pin}
+        if mission_id:
+            headers["X-Mission-Id"] = mission_id
         request = urllib.request.Request(
             f"{self.base}/api/mission/{action}", method="POST", headers=headers
         )
@@ -49,6 +51,11 @@ class WebTests(unittest.TestCase):
 
     def test_unknown_action_is_404(self) -> None:
         self.assertEqual(self.post("launch-missiles")[0], 404)
+
+    def test_duplicate_start_for_same_mission_is_safe(self) -> None:
+        self.assertEqual(self.post("start", mission_id="mission-1")[0], 200)
+        self.assertEqual(self.post("start", mission_id="mission-1")[0], 200)
+        self.assertEqual(self.manager.status()["mission_id"], "mission-1")
 
     def test_short_pin_is_rejected_at_startup(self) -> None:
         with self.assertRaises(ValueError):
