@@ -598,9 +598,10 @@ async def readiness(session: Session = Depends(get_session)) -> dict:
             checks[name] = {"connected": False, "error": str(exc)}
     checks["order_sync_worker"] = order_sync_worker_readiness()
     node = latest_robot_node(session)
+    motion_enabled = physical_motion_enabled(session)
     checks["robot"] = {
         "connected": False,
-        "motion_enabled": False,
+        "motion_enabled": motion_enabled,
     }
     if node:
         seen = node.last_seen_at
@@ -625,7 +626,7 @@ async def readiness(session: Session = Depends(get_session)) -> dict:
             and checks["order_sync_worker"].get("connected", False)
         ),
         "purchase_enabled": purchase_enabled(),
-        "motion_enabled": False,
+        "motion_enabled": motion_enabled,
         "checks": checks,
     }
 
@@ -635,20 +636,58 @@ async def prava_complete() -> str:
     return "<h1>Prava verification complete</h1><p>You can close this page. Max will continue automatically.</p>"
 
 
+PHYSICAL_SUBSYSTEMS = {
+    "camera",
+    "odometry",
+    "localization",
+    "obstruction",
+    "motors",
+    "controller",
+    "emergency_stop",
+}
+
+
+def physical_mode_enabled(session: Session) -> bool:
+    if robot_mode() != "pi_poll" or robot_dry_run():
+        return False
+    node = latest_robot_node(session)
+    if not node or node.mode != "physical":
+        return False
+    seen = node.last_seen_at
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return (utcnow() - seen).total_seconds() <= robot_heartbeat_stale_seconds()
+
+
+def physical_motion_enabled(session: Session) -> bool:
+    node = latest_robot_node(session)
+    return bool(
+        physical_mode_enabled(session)
+        and node
+        and node.status in {"READY", "BUSY"}
+        and all(node.subsystems.get(name) == "healthy" for name in PHYSICAL_SUBSYSTEMS)
+    )
+
+
 @app.get("/api/robot/v1/next", dependencies=[Depends(require_robot)])
 async def robot_next(session: Session = Depends(get_session)):
     if robot_mode() != "pi_poll":
         raise HTTPException(status_code=409, detail="outbound Pi polling is not enabled")
-    job = next_robot_job(session)
+    motion_enabled = physical_motion_enabled(session)
+    job = (
+        next_robot_job(session, dry_run=robot_dry_run())
+        if robot_dry_run() or motion_enabled
+        else None
+    )
     if not job:
         return {
             "schema_version": 1,
             "job": None,
-            "motion_enabled": False,
+            "motion_enabled": physical_mode_enabled(session),
         }
     return {
         "schema_version": 1,
-        "motion_enabled": False,
+        "motion_enabled": physical_mode_enabled(session),
         "job": {
             "schema_version": 1,
             "mission_id": job.mission_id,
@@ -666,17 +705,18 @@ async def robot_next(session: Session = Depends(get_session)):
 async def robot_current(session: Session = Depends(get_session)):
     if robot_mode() != "pi_poll":
         raise HTTPException(status_code=409, detail="outbound Pi polling is not enabled")
+    motion_enabled = physical_mode_enabled(session)
     job = current_robot_job(session)
     if not job:
         return {
             "schema_version": 1,
             "job": None,
-            "motion_enabled": False,
+            "motion_enabled": motion_enabled,
         }
     mission = session.get(Mission, job.mission_id)
     return {
         "schema_version": 1,
-        "motion_enabled": False,
+        "motion_enabled": motion_enabled,
         "job": {
             "schema_version": 1,
             "mission_id": job.mission_id,
@@ -722,7 +762,7 @@ async def robot_order_status(
             "eta_text": event.payload.get("eta_text"),
             "destination": quote.destination if quote else None,
             "robot_action": (
-                "QUEUE_DRY_RUN_DISPATCH"
+                ("QUEUE_DRY_RUN_DISPATCH" if robot_dry_run() else "QUEUE_PHYSICAL_DISPATCH")
                 if normalized == "ARRIVED_AT_DELIVERY_LOCATION"
                 else "WAIT"
             ),
@@ -730,7 +770,7 @@ async def robot_order_status(
         })
     return {
         "schema_version": 1,
-        "motion_enabled": False,
+        "motion_enabled": physical_mode_enabled(session),
         "next_cursor": events[-1].id if events else after,
         "events": values,
     }
@@ -740,6 +780,8 @@ async def robot_order_status(
 async def robot_ack(body: RobotPollAck, session: Session = Depends(get_session)):
     if robot_mode() != "pi_poll":
         raise HTTPException(status_code=409, detail="outbound Pi polling is not enabled")
+    if not body.dry_run and not physical_mode_enabled(session):
+        raise HTTPException(status_code=409, detail="physical robot is not ready")
     return mission_view(session, acknowledge_robot_job(session, body))
 
 
@@ -752,19 +794,20 @@ async def robot_heartbeat(body: RobotHeartbeat, session: Session = Depends(get_s
         "schema_version": 1,
         "robot_id": node.id,
         "accepted": True,
-        "motion_enabled": False,
+        "motion_enabled": physical_mode_enabled(session),
         "server_time": utcnow(),
     }
 
 
 @app.get("/api/robot/v1/status", dependencies=[Depends(require_admin)])
 async def robot_status(session: Session = Depends(get_session)):
+    motion_enabled = physical_motion_enabled(session)
     node = latest_robot_node(session)
     if not node:
         return {
             "schema_version": 1,
             "connected": False,
-            "motion_enabled": False,
+            "motion_enabled": motion_enabled,
             "robot": None,
         }
     seen = node.last_seen_at
@@ -774,7 +817,7 @@ async def robot_status(session: Session = Depends(get_session)):
     return {
         "schema_version": 1,
         "connected": not stale,
-        "motion_enabled": False,
+        "motion_enabled": motion_enabled,
         "robot": {
             "robot_id": node.id,
             "agent_version": node.agent_version,
@@ -798,6 +841,8 @@ async def robot_lifecycle(
 ):
     if robot_mode() != "pi_poll":
         raise HTTPException(status_code=409, detail="outbound Pi polling is not enabled")
+    if not body.dry_run and not physical_mode_enabled(session):
+        raise HTTPException(status_code=409, detail="physical robot is not ready")
     return mission_view(session, record_robot_lifecycle_report(session, body))
 
 

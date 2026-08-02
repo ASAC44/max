@@ -69,6 +69,12 @@ class MissionTests(unittest.TestCase):
         manager.release_emergency_stop()
         self.assertEqual(manager.state, MissionState.IDLE)
 
+    def test_status_identifies_physical_runtime(self) -> None:
+        manager = MissionManager(runtime_mode="physical")
+        status = manager.status(now=0)
+        self.assertEqual(status["runtime_mode"], "physical")
+        self.assertEqual(status["waypoint_index"], 0)
+
     def test_same_mission_start_is_idempotent(self) -> None:
         manager = MissionManager(ready_gate())
         manager.start(10.0, "mission-1")

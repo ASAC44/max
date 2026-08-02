@@ -36,8 +36,16 @@ class BridgeStateTests(unittest.TestCase):
             self.state.dispatch(changed)
 
     def test_physical_motion_is_fail_closed(self) -> None:
-        with self.assertRaisesRegex(BridgeError, "physical motion is disabled"):
+        with self.assertRaisesRegex(BridgeError, "invalid motion mode"):
             self.state.dispatch({**self.payload, "dry_run": False})
+
+    def test_physical_ack_requires_confirmed_local_motion(self) -> None:
+        ack = self.state.dispatch(
+            {**self.payload, "dry_run": False},
+            motion_started=True,
+        )
+        self.assertFalse(ack.dry_run)
+        self.assertTrue(ack.motion_started)
 
 
 if __name__ == "__main__":

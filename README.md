@@ -79,6 +79,8 @@ After configuring `.env`, Swiggy OAuth, and the dedicated checkout browser:
 
 [Read the complete setup, test, restart, and troubleshooting guide →](docs/RUN.md)
 
+[Commission and run the physical autonomous demo →](docs/PHYSICAL-ROBOT-DEMO.md)
+
 Scripts: [setup](scripts/setup.sh) · [start/stop development](scripts/dev.sh)
 
 ## Repository layout

@@ -1365,8 +1365,8 @@ def record_robot_dispatch_acknowledgement(
             mission_id,
             "robot dispatch is blocked until staged PACKAGE_READY",
         )
-    if dry_run and motion_started:
-        raise Conflict("robot cannot report motion during a dry run")
+    if dry_run == motion_started:
+        raise Conflict("robot acknowledgement has an invalid motion mode")
     updates = {
         "phase": Phase.EN_ROUTE_TO_PICKUP if motion_started else Phase.READY_TO_DISPATCH,
         "fulfilment_status": "EN_ROUTE_TO_PICKUP" if motion_started else "ROBOT_DRY_RUN_ACKNOWLEDGED",
@@ -1410,9 +1410,27 @@ def record_robot_lifecycle(
     ):
         return existing
     mission = _mission(session, mission_id)
-    if mission.environment != Environment.STAGED or not dry_run or motion_started:
-        raise Conflict("only no-motion staged lifecycle reports are enabled")
-    transitions = {
+    if mission.environment != Environment.STAGED or dry_run == motion_started:
+        raise Conflict("robot lifecycle has an invalid motion mode")
+    if stage == "CANCELLED":
+        if dry_run or mission.phase not in {
+            Phase.EN_ROUTE_TO_PICKUP,
+            Phase.AT_PICKUP,
+            Phase.ITEM_SECURED,
+            Phase.RETURNING,
+        }:
+            raise Conflict(f"CANCELLED is not valid from {mission.phase}")
+        return _transition(
+            session,
+            mission_id,
+            expected_version,
+            command_id,
+            "robot_lifecycle",
+            command_payload,
+            {"phase": Phase.CANCELLED, "fulfilment_status": "ROBOT_CANCELLED"},
+            [("PI_ROBOT_CANCELLED", {"dry_run": False, "motion_started": True, "schema_version": 1})],
+        )
+    dry_run_transitions = {
         "AT_PICKUP": (
             Phase.READY_TO_DISPATCH,
             {"phase": Phase.AT_PICKUP, "fulfilment_status": "DRY_RUN_AT_PICKUP"},
@@ -1434,7 +1452,29 @@ def record_robot_lifecycle(
             },
         ),
     }
-    expected_phase, updates = transitions[stage]
+    physical_transitions = {
+        "AT_PICKUP": (
+            Phase.EN_ROUTE_TO_PICKUP,
+            {"phase": Phase.AT_PICKUP, "fulfilment_status": "AT_PICKUP"},
+        ),
+        "ITEM_SECURED": (
+            Phase.AT_PICKUP,
+            {"phase": Phase.ITEM_SECURED, "fulfilment_status": "ITEM_SECURED"},
+        ),
+        "RETURNING": (
+            Phase.ITEM_SECURED,
+            {"phase": Phase.RETURNING, "fulfilment_status": "RETURNING"},
+        ),
+        "COMPLETED": (
+            Phase.RETURNING,
+            {
+                "phase": Phase.COMPLETED,
+                "fulfilment_status": "COMPLETED",
+                "notification_status": "STAGED_COMPLETED",
+            },
+        ),
+    }
+    expected_phase, updates = (dry_run_transitions if dry_run else physical_transitions)[stage]
     if mission.phase != expected_phase:
         return _replay_or_conflict(
             session,
@@ -1446,9 +1486,10 @@ def record_robot_lifecycle(
         )
     if (
         stage == "AT_PICKUP"
-        and mission.fulfilment_status != "ROBOT_DRY_RUN_ACKNOWLEDGED"
+        and mission.fulfilment_status
+        != ("ROBOT_DRY_RUN_ACKNOWLEDGED" if dry_run else "EN_ROUTE_TO_PICKUP")
     ):
-        raise Conflict("robot lifecycle cannot start before its dry-run acknowledgement")
+        raise Conflict("robot lifecycle cannot start before its acknowledgement")
     return _transition(
         session,
         mission_id,
@@ -1459,10 +1500,10 @@ def record_robot_lifecycle(
         updates,
         [
             (
-                f"PI_ROBOT_DRY_RUN_{stage}",
+                f"PI_ROBOT_{'DRY_RUN_' if dry_run else ''}{stage}",
                 {
-                    "dry_run": True,
-                    "motion_started": False,
+                    "dry_run": dry_run,
+                    "motion_started": motion_started,
                     "schema_version": 1,
                 },
             )

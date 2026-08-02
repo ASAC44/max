@@ -43,7 +43,7 @@ Only `ARRIVED_AT_DELIVERY_LOCATION` may:
    `trigger_source=SWIGGY` and
    `trigger_status=ARRIVED_AT_DELIVERY_LOCATION`.
 
-The job is still hard-coded to:
+The default job remains fail-closed:
 
 ```text
 dry_run=true
@@ -51,9 +51,13 @@ motion_enabled=false
 motion_started=false
 ```
 
+After physical commissioning, `MAX_ROBOT_DRY_RUN=false` queues a physical job.
+Delivery remains blocked until a fresh physical heartbeat reports every
+navigation and emergency-stop subsystem healthy.
+
 `DELIVERED` is recorded but does not create a new dispatch. Cancelled, failed,
 unknown, and pre-arrival states never queue a robot job. A cancellation or
-failure received after arrival revokes a queued or acknowledged dry-run job and
+failure received after arrival revokes a queued or acknowledged robot job and
 cancels the staged child before further lifecycle reports are accepted.
 
 ## Deployment

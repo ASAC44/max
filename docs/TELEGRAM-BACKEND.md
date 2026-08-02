@@ -152,7 +152,6 @@ MAX_ROBOT_DRY_RUN=true
 MAX_ROBOT_REHEARSAL=false
 ```
 
-The dashboard and Telegram show the same staged lifecycle truth. Autonomous
-driving remains disabled until localization, obstacle stopping, route recovery,
-measured odometry, and emergency-stop evidence are repeatable on the physical
-route.
+The dashboard and Telegram show the same staged lifecycle truth. Set
+`MAX_ROBOT_DRY_RUN=false` only after completing the physical commissioning and
+acceptance procedure in [PHYSICAL-ROBOT-DEMO.md](PHYSICAL-ROBOT-DEMO.md).

@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+mode=${1:-teleop}
+if [ "$mode" != teleop ] && [ "$mode" != autonomous ]; then
+  echo "usage: $0 [teleop|autonomous]" >&2
+  exit 2
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "run this installer with sudo" >&2
   exit 1
@@ -12,6 +18,16 @@ fi
 if [ ! -d /tmp/max-robot-source/apps/robot ]; then
   echo "/tmp/max-robot-source/apps/robot is required" >&2
   exit 1
+fi
+if [ "$mode" = autonomous ] && ! grep -qx 'MAX_ROBOT_DRY_RUN=false' /tmp/max-robot-agent.env; then
+  echo "autonomous mode requires MAX_ROBOT_DRY_RUN=false" >&2
+  exit 1
+fi
+if [ "$mode" = autonomous ]; then
+  test -x /opt/ros/lyrical/bin/ros2 || {
+    echo "ROS 2 Lyrical must be installed before autonomous mode" >&2
+    exit 1
+  }
 fi
 
 apt-get update
@@ -38,6 +54,11 @@ install -m 0644 \
 install -m 0644 \
   /tmp/max-robot-source/apps/robot/systemd/max-drive-controller.service \
   /etc/systemd/system/max-drive-controller.service
+if [ "$mode" = autonomous ]; then
+  install -m 0644 \
+    /tmp/max-robot-source/apps/robot/systemd/max-navigation.service \
+    /etc/systemd/system/max-navigation.service
+fi
 
 systemctl disable --now max-robot-bridge.service 2>/dev/null || true
 systemctl disable --now max-robot-poller.service 2>/dev/null || true
@@ -47,9 +68,20 @@ if [ -d /run/user/1000 ]; then
     2>/dev/null || true
 fi
 systemctl daemon-reload
-systemctl enable --now max-robot-agent.service
-systemctl enable --now max-teleop-agent.service
-systemctl enable --now max-drive-controller.service
+if [ "$mode" = autonomous ]; then
+  systemctl disable --now max-teleop-agent.service max-drive-controller.service 2>/dev/null || true
+  systemctl enable --now max-navigation.service
+  systemctl enable --now max-robot-agent.service
+else
+  systemctl disable --now max-navigation.service 2>/dev/null || true
+  systemctl enable --now max-robot-agent.service
+  systemctl enable --now max-teleop-agent.service
+  systemctl enable --now max-drive-controller.service
+fi
 systemctl --no-pager --full status max-robot-agent.service
-systemctl --no-pager --full status max-teleop-agent.service
-systemctl --no-pager --full status max-drive-controller.service
+if [ "$mode" = autonomous ]; then
+  systemctl --no-pager --full status max-navigation.service
+else
+  systemctl --no-pager --full status max-teleop-agent.service
+  systemctl --no-pager --full status max-drive-controller.service
+fi

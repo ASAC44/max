@@ -39,6 +39,7 @@ setup(
             "max-drive-controller = max_robot.drive_controller:main",
             "max-motors = max_robot.motor_node:main",
             "max-hardware-check = max_robot.hardware_check:main",
+            "max-estop = max_robot.estop_node:main",
         ]
     },
 )

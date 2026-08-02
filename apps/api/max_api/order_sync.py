@@ -17,6 +17,7 @@ from .config import (
     order_sync_error_interval_seconds,
     order_sync_interval_seconds,
     order_sync_state_file,
+    robot_dry_run,
 )
 from .db import SessionLocal
 from .integrations import IntegrationError, SwiggyClient, SwiggyOrderSnapshot
@@ -263,7 +264,7 @@ def apply_order_snapshot(
                 child.id,
                 snapshot.provider_order_id,
             ),
-            dry_run=True,
+            dry_run=robot_dry_run(),
             trigger_source="SWIGGY",
             trigger_status=normalized,
         )
@@ -319,7 +320,7 @@ async def sync_once(client: SwiggyClient | None = None) -> SyncSummary:
 
 
 def main() -> None:
-    print("Swiggy order status worker started; arrival dispatch is dry-run-only")
+    print(f"Swiggy order status worker started; robot mode={'dry_run' if robot_dry_run() else 'physical'}")
     while True:
         delay = order_sync_interval_seconds()
         try:

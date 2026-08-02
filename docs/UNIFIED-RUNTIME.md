@@ -54,7 +54,7 @@ a status update.
 
 ## Autonomous motion boundary
 
-The unified Pi agent is intentionally hard-coded to accept only:
+The default unified Pi agent accepts only:
 
 ```text
 dry_run=true
@@ -62,16 +62,13 @@ motion_started=false
 motion_enabled=false
 ```
 
-It refuses startup if `MAX_ROBOT_DRY_RUN` is not `true`, rejects any backend
-response that enables motion, and reports motors as disabled. The backend also
-rejects unsafe acknowledgements and lifecycle reports.
-
-This is required because the physical robot has no measured wheel odometry and
-no validated physical emergency-stop input. Camera, GPS, and IMU presence
-cannot replace wheel motion measurement or a collision-safe stopping system.
+Physical mode requires `MAX_ROBOT_DRY_RUN=false`, a fresh physical heartbeat,
+and healthy camera, measured odometry, localization, obstruction, controller,
+motor, and emergency-stop states. Commissioning and installation are described
+in [PHYSICAL-ROBOT-DEMO.md](PHYSICAL-ROBOT-DEMO.md).
 
 Manual remote keyboard control is a separate, explicitly armed operator path.
-It does not change the autonomous `motion_enabled=false` contract. Its
+It does not change the autonomous safety contract. Its
 single-controller lease, approved key map, uinput target, dead-man releases,
 and emergency-stop latch are specified in
 [REMOTE-TELEOP.md](REMOTE-TELEOP.md).
@@ -91,15 +88,16 @@ mode-0600 environment file to `/tmp/max-robot-agent.env`, then run:
 sudo /tmp/max-robot-source/infra/pi/install-agent.sh
 ```
 
-The installer creates `/opt/max-robot/venv`, installs three root-managed
-systemd units, stores configuration in `/etc/max-robot/agent.env`, and creates
-writable state under `/var/lib/max-robot`. It disables the legacy user-level
-bridge and drive units so they cannot compete for network input or GPIO.
+The default installer enables the agent and teleoperation services. After
+physical commissioning, `install-agent.sh autonomous` instead enables
+`max-navigation.service` and disables both teleoperation motor paths. Both
+modes store configuration in `/etc/max-robot/agent.env` and writable state
+under `/var/lib/max-robot`.
 
 Use `MAX_ROBOT_REHEARSAL=true` only for the labelled no-motion end-to-end
 rehearsal. It advances staged lifecycle checkpoints without driving motors.
-Normal installed state is `false`, so real pickup checkpoints require future
-validated hardware integration.
+Normal dry-run installed state is `false`; autonomous mode reports checkpoints
+from the validated local ROS mission.
 
 ## Readiness and monitoring
 

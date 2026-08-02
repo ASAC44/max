@@ -10,6 +10,7 @@ def generate_launch_description():
     share = get_package_share_directory("max_robot")
     database = LaunchConfiguration("database")
     reference_dir = LaunchConfiguration("reference_dir")
+    runtime_mode = LaunchConfiguration("runtime_mode")
     route = os.path.join(share, "config", "route.json")
     return LaunchDescription(
         [
@@ -20,6 +21,7 @@ def generate_launch_description():
                 "reference_dir",
                 default_value=os.path.join(share, "references"),
             ),
+            DeclareLaunchArgument("runtime_mode", default_value="simulation"),
             Node(
                 package="rtabmap_slam",
                 executable="rtabmap",
@@ -61,7 +63,7 @@ def generate_launch_description():
                 executable="max-control",
                 parameters=[
                     os.path.join(share, "config", "max.yaml"),
-                    {"route_file": route},
+                    {"route_file": route, "runtime_mode": runtime_mode},
                 ],
                 output="screen",
             ),

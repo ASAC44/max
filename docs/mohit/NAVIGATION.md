@@ -19,16 +19,10 @@ comparison, and optical flow are classical computer-vision algorithms.
 
 ## Current hardware boundary
 
-The available hardware is a Raspberry Pi 5, Camera Module 3, and BTS7960 motor
-driver, with no wheel encoders. The BTS7960 can apply motor power but cannot
-measure wheel motion, so it cannot publish the `/wheel/odom` input required by
-this stack.
-
-The complete route may therefore be developed and tested in simulation, where
-Gazebo supplies virtual wheel odometry. On the physical robot, camera streaming,
-obstruction experiments, supervised manual motor tests, and emergency stopping
-may be validated, but autonomous route execution must remain disabled until a
-measured odometry source is added. Timed PWM is not an odometry substitute.
+The physical stack requires a measured `nav_msgs/Odometry` source on
+`/wheel/odom`; timed PWM is not accepted as odometry. The autonomous demo
+assumes that source has been installed and calibrated. Without it, the safety
+gate remains stopped and only simulation or supervised teleoperation may run.
 
 Two motors and two BTS7960 bridges are supported by `max-motors`. Each motor
 needs four distinct BCM GPIO assignments. The shipped configuration uses `-1`

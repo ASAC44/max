@@ -1,0 +1,25 @@
+[Unit]
+Description=Max physical autonomous navigation (fail-closed)
+After=network-online.target
+Wants=network-online.target
+Conflicts=max-teleop-agent.service max-drive-controller.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+EnvironmentFile=/etc/max-robot/agent.env
+Environment=AMENT_PREFIX_PATH=/opt/max-robot/venv:/opt/ros/lyrical
+ExecStart=/bin/sh -c '. /opt/ros/lyrical/setup.sh && exec ros2 launch max_robot hardware.launch.py database:=$${MAX_NAVIGATION_DATABASE} reference_dir:=$${MAX_NAVIGATION_REFERENCE_DIR} motor_config:=$${MAX_NAVIGATION_MOTOR_CONFIG}'
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/max-robot
+StateDirectory=max-robot
+
+[Install]
+WantedBy=multi-user.target

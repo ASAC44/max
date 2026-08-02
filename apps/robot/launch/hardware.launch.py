@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -15,6 +16,7 @@ def generate_launch_description():
         DeclareLaunchArgument("database", default_value="/tmp/max_rtabmap.db"),
         DeclareLaunchArgument("reference_dir", default_value=os.path.join(share, "references")),
         DeclareLaunchArgument("motor_config", default_value=os.path.join(share, "config", "max.yaml")),
+        DeclareLaunchArgument("mapping", default_value="false"),
         Node(
             package="camera_ros",
             executable="camera_node",
@@ -46,6 +48,12 @@ def generate_launch_description():
         ),
         Node(package="max_robot", executable="max-odom-tf"),
         Node(
+            package="max_robot",
+            executable="max-estop",
+            parameters=[motor_config],
+            output="screen",
+        ),
+        Node(
             package="tf2_ros",
             executable="static_transform_publisher",
             arguments=[
@@ -59,12 +67,20 @@ def generate_launch_description():
             launch_arguments={
                 "database": LaunchConfiguration("database"),
                 "reference_dir": LaunchConfiguration("reference_dir"),
+                "runtime_mode": "physical",
             }.items(),
+            condition=UnlessCondition(LaunchConfiguration("mapping")),
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(share, "launch", "mapping.launch.py")),
+            launch_arguments={"database": LaunchConfiguration("database")}.items(),
+            condition=IfCondition(LaunchConfiguration("mapping")),
         ),
         Node(
             package="max_robot",
             executable="max-motors",
             parameters=[motor_config],
             output="screen",
+            condition=UnlessCondition(LaunchConfiguration("mapping")),
         ),
     ])

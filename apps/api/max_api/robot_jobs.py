@@ -30,8 +30,6 @@ def stage_robot_job(
         or mission.fulfilment_status not in {"PACKAGE_READY", "ROBOT_DRY_RUN_ACKNOWLEDGED"}
     ):
         raise Conflict("robot dispatch is blocked until staged PACKAGE_READY")
-    if not dry_run:
-        raise Conflict("outbound Pi polling is dry-run-only until navigation is validated")
     if trigger_source not in {"OPERATOR", "SWIGGY"}:
         raise Conflict("unsupported robot job trigger source")
     if not trigger_status or len(trigger_status) > 48:
@@ -43,7 +41,7 @@ def stage_robot_job(
             existing.mission_id != mission.id
             or existing.expected_version != expected_version
             or existing.destination != quote.destination
-            or not existing.dry_run
+            or existing.dry_run != dry_run
             or existing.trigger_source != trigger_source
             or existing.trigger_status != trigger_status
         ):
@@ -54,7 +52,7 @@ def stage_robot_job(
         mission_id=mission.id,
         expected_version=expected_version,
         destination=quote.destination,
-        dry_run=True,
+        dry_run=dry_run,
         trigger_source=trigger_source,
         trigger_status=trigger_status,
         status="PENDING",
@@ -73,10 +71,12 @@ def stage_robot_job(
         raise Conflict("robot job could not be staged") from exc
 
 
-def next_robot_job(session: Session) -> RobotJob | None:
+def next_robot_job(session: Session, *, dry_run: bool | None = None) -> RobotJob | None:
+    query = select(RobotJob).where(RobotJob.status.in_(("PENDING", "DELIVERED")))
+    if dry_run is not None:
+        query = query.where(RobotJob.dry_run == dry_run)
     job = session.scalar(
-        select(RobotJob)
-        .where(RobotJob.status.in_(("PENDING", "DELIVERED")))
+        query
         .order_by(RobotJob.created_at)
         .limit(1)
     )
@@ -105,7 +105,7 @@ def acknowledge_robot_job(session: Session, ack: RobotPollAck) -> Mission:
     job = session.get(RobotJob, ack.command_id)
     if not job or job.mission_id != ack.mission_id:
         raise Conflict("robot acknowledgement does not match a queued job")
-    if ack.dry_run != job.dry_run or not ack.dry_run or ack.motion_started:
+    if ack.dry_run != job.dry_run or ack.motion_started == ack.dry_run:
         raise Conflict("unsafe or mismatched robot acknowledgement")
     if job.status == "ACKNOWLEDGED":
         return session.get(Mission, job.mission_id)
@@ -116,8 +116,8 @@ def acknowledge_robot_job(session: Session, ack: RobotPollAck) -> Mission:
         job.mission_id,
         job.expected_version,
         job.command_id,
-        dry_run=True,
-        motion_started=False,
+        dry_run=ack.dry_run,
+        motion_started=ack.motion_started,
     )
     job = session.get(RobotJob, ack.command_id)
     job.status = "ACKNOWLEDGED"
@@ -155,6 +155,8 @@ def record_robot_lifecycle_report(
     job = session.get(RobotJob, report.command_id)
     if not job or job.mission_id != report.mission_id:
         raise Conflict("robot lifecycle report does not match a queued job")
+    if report.dry_run != job.dry_run or report.motion_started == report.dry_run:
+        raise Conflict("unsafe or mismatched robot lifecycle report")
     if job.status not in {
         "ACKNOWLEDGED",
         "AT_PICKUP",
@@ -169,6 +171,7 @@ def record_robot_lifecycle_report(
         "ITEM_SECURED": 2,
         "RETURNING": 3,
         "COMPLETED": 4,
+        "CANCELLED": 5,
     }
     mission = record_robot_lifecycle(
         session,

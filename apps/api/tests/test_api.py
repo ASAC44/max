@@ -14,15 +14,48 @@ from max_api.integrations import (
     PravaSession,
     SwiggyConnectionError,
 )
-from max_api.main import app, readiness_check_passes, swiggy_quote_with_transport_retry
-from max_api.models import Event, Mission, utcnow
-from max_api.schemas import Environment, ProviderResult, Quote, QuoteLine, ShoppingIntent
+from max_api.main import app, physical_motion_enabled, readiness_check_passes, swiggy_quote_with_transport_retry
+from max_api.models import Event, Mission, RobotNode, utcnow
+from max_api.schemas import Environment, ProviderResult, Quote, QuoteLine, RobotHeartbeat, ShoppingIntent
 
 
 def test_readiness_requires_connected_integrations_not_only_configuration():
     assert readiness_check_passes({"configured": True}) is True
     assert readiness_check_passes({"configured": True, "connected": True}) is True
     assert readiness_check_passes({"configured": True, "connected": False}) is False
+
+
+def test_physical_motion_requires_fresh_healthy_physical_heartbeat(session, monkeypatch):
+    monkeypatch.setenv("MAX_ROBOT_MODE", "pi_poll")
+    monkeypatch.setenv("MAX_ROBOT_DRY_RUN", "false")
+    node = RobotNode(
+        id="max-pi",
+        agent_version="0.4.0",
+        mode="physical",
+        status="READY",
+        subsystems={name: "healthy" for name in {
+            "camera", "odometry", "localization", "obstruction",
+            "motors", "controller", "emergency_stop",
+        }},
+        last_seen_at=utcnow(),
+    )
+    session.add(node)
+    session.commit()
+    assert physical_motion_enabled(session) is True
+    node.subsystems = {**node.subsystems, "obstruction": "degraded"}
+    session.commit()
+    assert physical_motion_enabled(session) is False
+
+
+def test_physical_heartbeat_requires_navigation_subsystems():
+    with pytest.raises(ValueError, match="missing required subsystems"):
+        RobotHeartbeat.model_validate({
+            "robot_id": "max-pi",
+            "agent_version": "0.4.0",
+            "mode": "physical",
+            "status": "READY",
+            "subsystems": {"camera": "healthy"},
+        })
 
 
 def test_swiggy_quote_retries_one_transport_failure(monkeypatch):

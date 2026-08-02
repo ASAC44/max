@@ -22,6 +22,7 @@ pre{background:#eee;padding:1rem;overflow:auto}
 <div>
 <button data-action="start">Start</button><button data-action="stop">Stop</button>
 <button data-action="resume">Resume</button><button data-action="confirm-pickup">Confirm pickup</button>
+<button data-action="release-emergency-stop">Release emergency stop</button>
 <button data-action="cancel">Cancel</button>
 <button class="danger" data-action="emergency-stop">Emergency stop</button>
 </div>
@@ -74,6 +75,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             "confirm-pickup",
             "cancel",
             "emergency-stop",
+            "release-emergency-stop",
         }:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -106,6 +108,8 @@ class ControlHandler(BaseHTTPRequestHandler):
             manager.confirm_pickup()
         elif action == "cancel":
             manager.cancel()
+        elif action == "release-emergency-stop":
+            manager.release_emergency_stop()
         else:
             manager.emergency_stop()
 

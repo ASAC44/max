@@ -28,6 +28,7 @@ from max_api.workflow import (
     record_prava_payment_state,
     record_prava_session,
     record_robot_dispatch_acknowledgement,
+    record_robot_lifecycle,
     requote,
     retry_allowed,
     run_robot_simulation,
@@ -193,6 +194,62 @@ def test_pi_robot_dry_run_acknowledgement_does_not_claim_motion(session):
         "PI_ROBOT_BRIDGE",
         "staged_demo",
     )
+
+
+def test_physical_robot_acknowledgement_and_lifecycle_claim_motion(session):
+    declined = complete_decline(session)
+    child = start_staged_fulfilment(session, declined.id, declined.version, "physical-stage")
+    child = package_ready(session, child.id, child.version, "physical-package")
+    child = record_robot_dispatch_acknowledgement(
+        session,
+        child.id,
+        child.version,
+        "physical-dispatch",
+        dry_run=False,
+        motion_started=True,
+    )
+    assert child.phase == Phase.EN_ROUTE_TO_PICKUP
+    for stage, phase in {
+        "AT_PICKUP": Phase.AT_PICKUP,
+        "ITEM_SECURED": Phase.ITEM_SECURED,
+        "RETURNING": Phase.RETURNING,
+        "COMPLETED": Phase.COMPLETED,
+    }.items():
+        child = record_robot_lifecycle(
+            session,
+            child.id,
+            child.version,
+            f"physical-{stage.lower()}",
+            stage=stage,
+            dry_run=False,
+            motion_started=True,
+        )
+        assert child.phase == phase
+
+
+def test_physical_robot_can_report_cancellation(session):
+    declined = complete_decline(session)
+    child = start_staged_fulfilment(session, declined.id, declined.version, "cancel-stage")
+    child = package_ready(session, child.id, child.version, "cancel-package")
+    child = record_robot_dispatch_acknowledgement(
+        session,
+        child.id,
+        child.version,
+        "cancel-dispatch",
+        dry_run=False,
+        motion_started=True,
+    )
+    child = record_robot_lifecycle(
+        session,
+        child.id,
+        child.version,
+        "cancel-report",
+        stage="CANCELLED",
+        dry_run=False,
+        motion_started=True,
+    )
+    assert child.phase == Phase.CANCELLED
+    assert child.fulfilment_status == "ROBOT_CANCELLED"
 
 
 def test_unknown_checkout_is_not_retryable(session):

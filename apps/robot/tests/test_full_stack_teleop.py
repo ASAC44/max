@@ -154,11 +154,7 @@ def test_real_websocket_browser_to_backend_to_target_agent(tmp_path, monkeypatch
             "protocol_version": 1,
             "token": ADMIN_TOKEN,
         }))
-        assert receive_type(controller, "ready")["emergency_stop"] is True
-        controller.send(json.dumps({
-            "type": "reset_estop",
-            "protocol_version": 1,
-        }))
+        assert receive_type(controller, "ready")["emergency_stop"] is False
         while True:
             status = receive_type(controller, "status")
             if status["controls_enabled"]:

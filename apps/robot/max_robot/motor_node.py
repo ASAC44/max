@@ -71,6 +71,7 @@ def main(args: list[str] | None = None) -> None:
     import rclpy
     from geometry_msgs.msg import Twist
     from rclpy.node import Node
+    from std_msgs.msg import String
 
     class MotorNode(Node):
         def __init__(self) -> None:
@@ -106,8 +107,13 @@ def main(args: list[str] | None = None) -> None:
             self.left.enable()
             self.right.enable()
             self.last_command = 0.0
+            self.status_publisher = self.create_publisher(String, "/motors/status", 10)
             self.create_subscription(Twist, "/cmd_vel", self.on_command, 10)
             self.create_timer(0.05, self.watchdog)
+            self.create_timer(0.1, self.publish_status)
+
+        def publish_status(self) -> None:
+            self.status_publisher.publish(String(data="healthy"))
 
         def on_command(self, message: Twist) -> None:
             left, right = mix(message.linear.x, message.angular.z, self.config)

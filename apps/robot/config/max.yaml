@@ -29,3 +29,7 @@ max_motors:
     max_duty: 0.25
     left_polarity: 1.0
     right_polarity: 1.0
+
+max_estop:
+  ros__parameters:
+    gpio: -1

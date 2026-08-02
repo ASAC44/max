@@ -15,6 +15,7 @@ COPYFILE_DISABLE=1 tar \
   -C "$root" -czf "$output" \
   apps/robot \
   infra/pi/install-agent.sh \
+  infra/pi/verify-navigation.sh \
   infra/pi/max-robot-agent.env.example
 
 echo "$output"

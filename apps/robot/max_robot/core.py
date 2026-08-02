@@ -50,6 +50,8 @@ class SafetyGate:
             "localization": 0.0,
             "obstruction": 0.0,
             "controller": 0.0,
+            "motors": 0.0,
+            "estop": 0.0,
         }
     )
 
@@ -83,8 +85,15 @@ class InvalidTransition(ValueError):
 class MissionManager:
     """Thread-safe mission state machine shared by ROS and the web API."""
 
-    def __init__(self, safety: SafetyGate | None = None) -> None:
+    def __init__(
+        self,
+        safety: SafetyGate | None = None,
+        *,
+        runtime_mode: str = "unknown",
+    ) -> None:
         self.safety = safety or SafetyGate()
+        self.runtime_mode = runtime_mode
+        self.waypoint_index = 0
         self.state = MissionState.IDLE
         self.last_reason = ""
         self.mission_id: str | None = None
@@ -207,12 +216,15 @@ class MissionManager:
         with self._lock:
             reasons = self.safety.reasons(now)
             return {
+                "runtime_mode": self.runtime_mode,
                 "mission": self.state,
                 "mission_id": self.mission_id,
+                "waypoint_index": self.waypoint_index,
                 "localization": self.safety.localization,
                 "obstruction": self.safety.obstruction,
                 "emergency_stop": self.safety.emergency_stop,
                 "movement_allowed": self.state in MOVING_STATES and not reasons,
+                "ready": self.state in {MissionState.IDLE, MissionState.COMPLETE, MissionState.CANCELLED} and not reasons,
                 "safety_reasons": reasons,
                 "last_reason": self.last_reason,
             }

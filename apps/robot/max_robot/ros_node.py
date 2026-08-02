@@ -35,6 +35,7 @@ def main(args: list[str] | None = None) -> None:
             self.declare_parameter("web_port", 8080)
             self.declare_parameter("max_linear_speed", 0.15)
             self.declare_parameter("minimum_tag_margin", 30.0)
+            self.declare_parameter("runtime_mode", "simulation")
             route_file = self.get_parameter("route_file").value
             if not route_file:
                 raise RuntimeError("route_file parameter is required")
@@ -52,7 +53,11 @@ def main(args: list[str] | None = None) -> None:
             )
             self.pose: Pose2D | None = None
             self.safety = SafetyGate()
-            self.manager = MissionManager(self.safety)
+            runtime_mode = str(self.get_parameter("runtime_mode").value)
+            if runtime_mode not in {"simulation", "physical"}:
+                raise RuntimeError("runtime_mode must be simulation or physical")
+            self.manager = MissionManager(self.safety, runtime_mode=runtime_mode)
+            self.runtime_mode = runtime_mode
             self.last_state = self.manager.state
 
             self.velocity_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
@@ -74,6 +79,7 @@ def main(args: list[str] | None = None) -> None:
                 String, "/obstruction/status", self.on_obstruction, 10
             )
             self.create_subscription(Bool, "/emergency_stop", self.on_estop, 10)
+            self.create_subscription(String, "/motors/status", self.on_motors, 10)
             self.create_subscription(
                 AprilTagDetectionArray,
                 "/apriltag/detections",
@@ -123,10 +129,13 @@ def main(args: list[str] | None = None) -> None:
             self.safety.heartbeat("obstruction")
 
         def on_estop(self, message: Bool) -> None:
+            self.safety.heartbeat("estop")
             if message.data:
                 self.manager.emergency_stop()
-            elif self.safety.emergency_stop:
-                self.manager.release_emergency_stop()
+
+        def on_motors(self, message: String) -> None:
+            if message.data == "healthy":
+                self.safety.heartbeat("motors")
 
         def on_tags(self, message: AprilTagDetectionArray) -> None:
             now = time.monotonic()
@@ -144,6 +153,9 @@ def main(args: list[str] | None = None) -> None:
         def control(self) -> None:
             now = time.monotonic()
             self.safety.heartbeat("controller", now)
+            if self.runtime_mode == "simulation":
+                self.safety.heartbeat("motors", now)
+                self.safety.heartbeat("estop", now)
             state = self.manager.state
             if state != self.last_state:
                 if state is MissionState.OUTBOUND and (
@@ -192,6 +204,7 @@ def main(args: list[str] | None = None) -> None:
             self.waypoint_publisher.publish(
                 Int32(data=self.follower.reference_index)
             )
+            self.manager.waypoint_index = self.follower.reference_index
             command = Twist()
             command.linear.x = velocity.linear
             command.angular.z = velocity.angular

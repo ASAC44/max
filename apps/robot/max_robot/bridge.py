@@ -49,21 +49,26 @@ class BridgeState:
         self.latest_order_status: dict[str, dict[str, Any]] = {}
         self._load()
 
-    def dispatch(self, payload: dict[str, Any]) -> DispatchAck:
+    def dispatch(
+        self,
+        payload: dict[str, Any],
+        *,
+        motion_started: bool = False,
+    ) -> DispatchAck:
         command = self._parse(payload)
         with self.lock:
             if self.last_command and self.last_command.command_id == command.command_id:
                 if self.last_command != command or self.last_ack is None:
                     raise BridgeError("command_id was already used for a different mission command")
                 return self.last_ack
-            if not command.dry_run:
-                raise BridgeError("physical motion is disabled; use dry_run until navigation is validated")
+            if command.dry_run == motion_started:
+                raise BridgeError("dispatch has an invalid motion mode")
             ack = DispatchAck(
                 mission_id=command.mission_id,
                 command_id=command.command_id,
                 status="ACKNOWLEDGED",
-                dry_run=True,
-                motion_started=False,
+                dry_run=command.dry_run,
+                motion_started=motion_started,
                 acknowledged_at=datetime.now(timezone.utc).isoformat(),
             )
             self.last_command = command

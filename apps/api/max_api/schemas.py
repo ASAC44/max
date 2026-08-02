@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Environment(StrEnum):
@@ -135,7 +135,7 @@ class RobotPollAck(BaseModel):
 class RobotHeartbeat(BaseModel):
     robot_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     agent_version: str = Field(min_length=1, max_length=32)
-    mode: Literal["dry_run"]
+    mode: Literal["dry_run", "physical"]
     status: Literal["IDLE", "READY", "BUSY", "DEGRADED", "EMERGENCY_STOP"]
     subsystems: dict[
         str,
@@ -143,13 +143,24 @@ class RobotHeartbeat(BaseModel):
     ]
     last_error: str | None = Field(default=None, max_length=128)
 
-    @field_validator("subsystems")
-    @classmethod
-    def required_subsystems(cls, value):
-        required = {"camera", "gps", "imu", "audio", "motors", "emergency_stop"}
-        if set(value) != required:
-            raise ValueError("subsystems must report camera, gps, imu, audio, motors, and emergency_stop")
-        return value
+    @model_validator(mode="after")
+    def required_subsystems(self):
+        required = (
+            {"camera", "gps", "imu", "audio", "motors", "emergency_stop"}
+            if self.mode == "dry_run"
+            else {
+                "camera",
+                "odometry",
+                "localization",
+                "obstruction",
+                "motors",
+                "controller",
+                "emergency_stop",
+            }
+        )
+        if not required.issubset(self.subsystems):
+            raise ValueError(f"{self.mode} heartbeat is missing required subsystems")
+        return self
 
 
 class RobotLifecycleReport(BaseModel):
@@ -157,9 +168,9 @@ class RobotLifecycleReport(BaseModel):
     command_id: str = Field(min_length=8, max_length=64)
     event_id: str = Field(min_length=8, max_length=64)
     expected_version: int = Field(ge=0)
-    stage: Literal["AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED"]
-    dry_run: Literal[True]
-    motion_started: Literal[False]
+    stage: Literal["AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED", "CANCELLED"]
+    dry_run: bool
+    motion_started: bool
 
 
 class BindOrderCommand(CommandBase):
