@@ -4,6 +4,10 @@
 > successful API call, isolated mock, or polished UI cannot prove the complete
 > system.
 
+The authenticated remote keyboard implementation and its browser/backend/target
+failure matrix are recorded in
+[TEST-2026-08-02-remote-teleop.md](TEST-2026-08-02-remote-teleop.md).
+
 ## Evidence ladder
 
 From weakest to strongest:
@@ -117,7 +121,7 @@ Update the status and evidence link as work progresses.
 | Product search | Observed once | `milk` returned in-stock products including selected Amul variant |
 | Product selection | Implemented against observed shape; live local run pending | Selection uses an in-stock spin ID and enforces owner maximum budget |
 | Final Swiggy quote | Observed once | ₹144 items + ₹3 handling exactly matched browser ₹147 total |
-| Prava session creation | Observed once; adapter contract tested | Matching ₹147 hosted sandbox page plus a fresh API run; callback is optional and HTTPS when supplied |
+| Prava session creation | Confirmed again on AWS release path with a redacted ₹1 sandbox session; no money moved | Matching live quote hosted sandbox page plus owner approval; callback is optional and HTTPS when supplied |
 | Passkey approval | Blocked/unknown | Current run showed `Verification Unavailable` before a prompt; physical-browser diagnostic required |
 | Scoped credential readiness | Unknown live; memory-only handoff contract tested | Must observe `awaiting_result`; API persists only readiness/reference, never credential values |
 | MCP-to-browser cart parity | Observed once | Same-account browser exactly matched item, quantity, address label, fees, and ₹147 total |
@@ -126,15 +130,15 @@ Update the status and evidence link as work progresses.
 | Swiggy payment/order status | Delegated; unknown | Browser order history and safe MCP reads agree on terminal decline/no order, or the run is labeled outcome-unknown |
 | Merchant order confirmation | Not required for the decline demo | Real Swiggy order ID/status only after separate explicit production-purchase approval |
 | Dashboard mission truth | Observed locally for the full simulated and separate staged branches | Headless action test completed create, exact approval/decline, staged creation, `PACKAGE_READY`, robot simulation, and refresh; user manual review remains |
-| Robot dispatch contract | Prototype code present; integration unknown | Backend command acknowledged by navigation stack using the agreed contract |
+| Robot dispatch contract | Unified authenticated agent, heartbeat, restart recovery, and no-motion lifecycle are contract-tested; Pi installation pending power-on | Backend command acknowledged on the Pi, fresh heartbeat visible, and all device probes inspected |
 | Hardware-free navigation core | Partially observed | 13 local core tests passed; dependency/socket gaps and all simulator/physical claims remain open; see `TEST-2026-08-01-navigation-core.md` |
 | Autonomous route to pickup | Navigation-team work; not observed | Physical repeatable route evidence with measured odometry |
 | Point-of-contact readiness | Planned staged event | Dashboard or tested notification route records `PACKAGE_READY` and labels it staged, not Swiggy |
 | Pickup/cargo confirmation | Unknown | Agreed signal/event observed with the staged package |
 | Return and completion | Navigation/hardware work | Robot returns and backend records verified completion |
 | Linq notification | Unknown | Actual required events delivered with IDs/latency |
-| Telegram fallback | Unknown | Same event contract passes only if fallback is selected |
-| End-to-end mission | Not started | One mission ID connects every honestly labeled stage |
+| Telegram fallback | Owner-only webhook/worker and staged controls are contract-tested; live token/webhook pending | BotFather token, owner ID, webhook delivery, and duplicate/failure tests on the deployed bot |
+| End-to-end mission | Mixed software rehearsal passed with a linked parent/child chain and no motion/purchase; external and physical gates remain | One owner-approved run connects every honestly labeled external and physical stage |
 
 “Theoretically confirmed” is deliberately not “working.” Replace it only after
 the manual test record exists.

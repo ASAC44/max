@@ -30,6 +30,18 @@ TERMINAL_PHASES = {
     Phase.CANCELLED,
 }
 
+SWIGGY_STATUS_RANK = {
+    "UNKNOWN": 0,
+    "ORDER_PLACED": 1,
+    "CONFIRMED": 2,
+    "PREPARING": 3,
+    "READY_FOR_PICKUP": 4,
+    "OUT_FOR_DELIVERY": 5,
+    "ARRIVED_AT_DELIVERY_LOCATION": 6,
+    "DELIVERED": 7,
+}
+SWIGGY_TERMINAL_STATUSES = {"DELIVERED", "CANCELLED", "FAILED"}
+
 
 def _mission(session: Session, mission_id: str) -> Mission:
     mission = session.get(Mission, mission_id)
@@ -99,6 +111,12 @@ def _event_metadata(
         return "commerce", "SIMULATED_SWIGGY", human, mission_environment
     if event_type == "SWIGGY_QUOTE_CREATED":
         return "commerce", "SWIGGY_INSTAMART_MCP", human, Environment.PRODUCTION
+    if event_type.startswith("SWIGGY_ORDER_"):
+        return "commerce", "SWIGGY_INSTAMART_MCP", False, Environment.PRODUCTION
+    if event_type == "SWIGGY_PACKAGE_READY":
+        return "fulfilment", "SWIGGY_INSTAMART_MCP", False, Environment.STAGED
+    if event_type == "SWIGGY_FULFILMENT_CANCELLED":
+        return "fulfilment", "SWIGGY_INSTAMART_MCP", False, Environment.STAGED
     if event_type.startswith("SWIGGY_BROWSER_"):
         return "commerce", "SWIGGY_BROWSER", human, Environment.PRODUCTION
     if event_type == "SIMULATED_CHECKOUT_OUTCOME_UNKNOWN":
@@ -112,6 +130,8 @@ def _event_metadata(
     if "MERCHANT" in event_type or event_type == "SIMULATED_ORDER_CONFIRMED":
         environment = Environment.STAGED if event_type == "SIMULATED_ORDER_CONFIRMED" else Environment.LOCAL
         return "commerce", "SIMULATED_SWIGGY", human, environment
+    if event_type.startswith("PI_ROBOT_"):
+        return "robot", "PI_ROBOT_BRIDGE", human, Environment.STAGED
     if "ROBOT" in event_type or event_type == "SIMULATED_ITEM_SECURED":
         return "robot", "SIMULATED_ROBOT", human, Environment.LOCAL
     if "NOTIFICATION" in event_type:
@@ -488,6 +508,8 @@ def record_prava_session(
     command_id: str,
     action: dict,
 ) -> Mission:
+    if action.get("environment", "sandbox") not in {"sandbox", "production"}:
+        raise Conflict("Prava session environment is invalid")
     payload = {"mission_id": mission_id, **action}
     if existing := _existing_command(session, command_id, "record_prava_session", payload, mission_id):
         return existing
@@ -505,7 +527,7 @@ def record_prava_session(
             "phase": Phase.PAYMENT_APPROVAL_REQUIRED,
             "payment_status": "AWAITING_PRAVA_VERIFICATION",
         },
-        [("PRAVA_SANDBOX_SESSION_CREATED", action)],
+        [("PRAVA_SESSION_CREATED", action)],
     )
 
 
@@ -839,8 +861,25 @@ def requote(session: Session, mission_id: str, expected_version: int, command_id
     )
 
 
-def cancel(session: Session, mission_id: str, expected_version: int, command_id: str) -> Mission:
-    command_payload = {"mission_id": mission_id, "expected_version": expected_version}
+def cancel(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    *,
+    prava_revocation: str | None = None,
+    source: str = "operator",
+    source_status: str | None = None,
+) -> Mission:
+    if prava_revocation not in {None, "confirmed", "failed"}:
+        raise Conflict("unsupported Prava revocation result")
+    command_payload = {
+        "mission_id": mission_id,
+        "expected_version": expected_version,
+        "prava_revocation": prava_revocation,
+    }
+    if source != "operator":
+        command_payload.update({"source": source, "source_status": source_status})
     if existing := _existing_command(session, command_id, "cancel", command_payload, mission_id):
         return existing
     mission = _mission(session, mission_id)
@@ -858,6 +897,22 @@ def cancel(session: Session, mission_id: str, expected_version: int, command_id:
             "mission cannot be cancelled from its current state",
         )
     updates = {"phase": Phase.CANCELLED}
+    events: list[tuple[str, dict]] = [("MISSION_CANCELLED", {})]
+    if source == "swiggy_status":
+        updates.update({
+            "commerce_status": f"SWIGGY_{source_status or 'CANCELLED'}",
+            "fulfilment_status": "CANCELLED_BY_SWIGGY_STATUS",
+        })
+        events = [(
+            "SWIGGY_FULFILMENT_CANCELLED",
+            {"source": source, "source_status": source_status},
+        )]
+    if prava_revocation == "confirmed":
+        updates["payment_status"] = "PRAVA_SESSION_REVOKED"
+        events.insert(0, ("PRAVA_SESSION_REVOKED", {}))
+    elif prava_revocation == "failed":
+        updates["payment_status"] = "PRAVA_REVOCATION_FAILED"
+        events.insert(0, ("PRAVA_SESSION_REVOCATION_FAILED", {}))
     if mission.environment == Environment.STAGED:
         updates["fulfilment_status"] = "CANCELLED"
     return _transition(
@@ -868,7 +923,7 @@ def cancel(session: Session, mission_id: str, expected_version: int, command_id:
         "cancel",
         command_payload,
         updates,
-        [("MISSION_CANCELLED", {})],
+        events,
     )
 
 
@@ -894,8 +949,18 @@ def close_unresolved(session: Session, mission_id: str, expected_version: int, c
     )
 
 
-def start_staged_fulfilment(session: Session, parent_id: str, expected_version: int, command_id: str) -> Mission:
+def start_staged_fulfilment(
+    session: Session,
+    parent_id: str,
+    expected_version: int,
+    command_id: str,
+    *,
+    source: str = "operator",
+    source_status: str | None = None,
+) -> Mission:
     command_payload = {"parent_id": parent_id, "expected_version": expected_version}
+    if source != "operator":
+        command_payload.update({"source": source, "source_status": source_status})
     if existing := _existing_command(session, command_id, "start_staged", command_payload):
         return existing
     parent = _mission(session, parent_id)
@@ -904,15 +969,24 @@ def start_staged_fulfilment(session: Session, parent_id: str, expected_version: 
             session, command_id, "start_staged", command_payload, None,
             "mission changed; refresh before retrying",
         )
-    if parent.phase != Phase.PAYMENT_DECLINED:
+    if parent.phase not in {Phase.PAYMENT_DECLINED, Phase.ORDER_CONFIRMED}:
         return _replay_or_conflict(
             session, command_id, "start_staged", command_payload, None,
-            "staged fulfilment requires the recorded decline",
+            "staged fulfilment requires a terminal merchant result",
         )
     if session.scalar(select(Mission).where(Mission.parent_mission_id == parent_id)):
         raise Conflict("staged fulfilment already exists for this mission")
-    if session.scalar(select(Mission.id).where(Mission.active_slot == "active")):
+    active_id = session.scalar(
+        select(Mission.id).where(Mission.active_slot == "active")
+    )
+    if active_id and active_id != parent.id:
         raise Conflict("another mission is active")
+    source_confirmed = parent.phase == Phase.ORDER_CONFIRMED
+    event_type = (
+        "STAGED_FULFILMENT_CREATED"
+        if source_confirmed
+        else "SIMULATED_ORDER_CONFIRMED"
+    )
     child = Mission(
         id=str(uuid4()),
         parent_mission_id=parent.id,
@@ -926,13 +1000,31 @@ def start_staged_fulfilment(session: Session, parent_id: str, expected_version: 
         quote=parent.quote,
         quote_hash=parent.quote_hash,
         approval_quote_hash=None,
-        commerce_status="SIMULATED_ORDER_CONFIRMED",
-        payment_status="NOT_APPLICABLE_STAGED",
-        checkout_status="NOT_APPLICABLE_STAGED",
+        commerce_status=(
+            f"SWIGGY_{source_status}"
+            if source == "swiggy_status" and source_status
+            else (
+                "SOURCE_ORDER_CONFIRMED"
+                if source_confirmed
+                else "SIMULATED_ORDER_CONFIRMED"
+            )
+        ),
+        payment_status=(
+            "SOURCE_PAYMENT_CONFIRMED"
+            if source_confirmed
+            else "NOT_APPLICABLE_STAGED"
+        ),
+        checkout_status=(
+            "SOURCE_ORDER_CONFIRMED"
+            if source_confirmed
+            else "NOT_APPLICABLE_STAGED"
+        ),
         fulfilment_status="AWAITING_PACKAGE_READY",
         notification_status="NOT_STARTED",
     )
     try:
+        if parent.active_slot == "active":
+            parent.active_slot = None
         session.add(child)
         session.flush()
         session.add(Event(
@@ -941,14 +1033,20 @@ def start_staged_fulfilment(session: Session, parent_id: str, expected_version: 
             command_id=command_id,
             command_scope="start_staged",
             request_hash=_request_hash("start_staged", command_payload),
-            event_type="SIMULATED_ORDER_CONFIRMED",
-            component="commerce",
-            provider="SIMULATED_SWIGGY",
-            human_intervened=True,
+            event_type=event_type,
+            component="fulfilment",
+            provider="SWIGGY_INSTAMART_MCP" if source == "swiggy_status" else "OPERATOR",
+            human_intervened=source != "swiggy_status",
             environment=Environment.STAGED,
             phase_before=Phase.DRAFT,
             phase_after=Phase.ORDER_CONFIRMED,
-            payload={"source_mission_id": parent.id, "source_payment_result": parent.phase},
+            payload={
+                "source_mission_id": parent.id,
+                "source_payment_result": parent.phase,
+                "staged_physical_fulfilment": True,
+                "source": source,
+                "source_status": source_status,
+            },
         ))
         session.commit()
         return child
@@ -958,13 +1056,26 @@ def start_staged_fulfilment(session: Session, parent_id: str, expected_version: 
             return existing
         if session.scalar(select(Mission).where(Mission.parent_mission_id == parent_id)):
             raise Conflict("staged fulfilment already exists for this mission")
-        if session.scalar(select(Mission.id).where(Mission.active_slot == "active")):
+        active_id = session.scalar(
+            select(Mission.id).where(Mission.active_slot == "active")
+        )
+        if active_id and active_id != parent.id:
             raise Conflict("another mission is active")
         raise Conflict("staged fulfilment already exists for this mission")
 
 
-def package_ready(session: Session, mission_id: str, expected_version: int, command_id: str) -> Mission:
+def package_ready(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    *,
+    source: str = "operator",
+    source_status: str | None = None,
+) -> Mission:
     command_payload = {"mission_id": mission_id, "expected_version": expected_version}
+    if source != "operator":
+        command_payload.update({"source": source, "source_status": source_status})
     if existing := _existing_command(session, command_id, "package_ready", command_payload, mission_id):
         return existing
     mission = _mission(session, mission_id)
@@ -976,8 +1087,105 @@ def package_ready(session: Session, mission_id: str, expected_version: int, comm
     return _transition(
         session, mission_id, expected_version, command_id,
         "package_ready", command_payload,
-        {"phase": Phase.READY_TO_DISPATCH, "fulfilment_status": "PACKAGE_READY"},
-        [("PACKAGE_READY", {"source": "operator", "environment": Environment.STAGED})],
+        {
+            "phase": Phase.READY_TO_DISPATCH,
+            "fulfilment_status": "PACKAGE_READY",
+            **(
+                {"commerce_status": f"SWIGGY_{source_status}"}
+                if source == "swiggy_status" and source_status
+                else {}
+            ),
+        },
+        [(
+            "SWIGGY_PACKAGE_READY" if source == "swiggy_status" else "PACKAGE_READY",
+            {
+                "source": source,
+                "source_status": source_status,
+                "environment": Environment.STAGED,
+            },
+        )],
+    )
+
+
+def record_swiggy_order_status(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    *,
+    provider_order_id: str,
+    raw_status: str,
+    normalized_status: str,
+    eta_text: str | None,
+) -> Mission:
+    command_payload = {
+        "mission_id": mission_id,
+        "provider_order_id": provider_order_id,
+        "raw_status": raw_status,
+        "normalized_status": normalized_status,
+        "eta_text": eta_text,
+    }
+    if existing := _existing_command(
+        session,
+        command_id,
+        "record_swiggy_status",
+        command_payload,
+        mission_id,
+    ):
+        return existing
+    mission = _mission(session, mission_id)
+    if (
+        mission.version != expected_version
+        or mission.environment != Environment.PRODUCTION
+        or mission.phase != Phase.ORDER_CONFIRMED
+    ):
+        return _replay_or_conflict(
+            session,
+            command_id,
+            "record_swiggy_status",
+            command_payload,
+            mission_id,
+            "Swiggy status applies only to the current confirmed production order",
+        )
+    current_status = (
+        mission.commerce_status.removeprefix("SWIGGY_")
+        if mission.commerce_status.startswith("SWIGGY_")
+        else None
+    )
+    apply_to_current = True
+    if current_status in SWIGGY_TERMINAL_STATUSES:
+        apply_to_current = normalized_status == current_status
+    elif normalized_status == "UNKNOWN" and current_status:
+        apply_to_current = False
+    elif (
+        current_status in SWIGGY_STATUS_RANK
+        and normalized_status in SWIGGY_STATUS_RANK
+        and SWIGGY_STATUS_RANK[normalized_status]
+        < SWIGGY_STATUS_RANK[current_status]
+    ):
+        apply_to_current = False
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "record_swiggy_status",
+        command_payload,
+        (
+            {"commerce_status": f"SWIGGY_{normalized_status}"}
+            if apply_to_current
+            else {}
+        ),
+        [(
+            f"SWIGGY_ORDER_{normalized_status}",
+            {
+                "provider_order_id": provider_order_id,
+                "raw_status": raw_status,
+                "normalized_status": normalized_status,
+                "eta_text": eta_text,
+                "applied_to_current": apply_to_current,
+            },
+        )],
     )
 
 
@@ -1007,6 +1215,142 @@ def run_robot_simulation(session: Session, mission_id: str, expected_version: in
             ("SIMULATED_ROBOT_RETURNING", {}),
             ("SIMULATED_ROBOT_COMPLETED", {}),
             ("SIMULATED_NOTIFICATION_COMPLETED", {}),
+        ],
+    )
+
+
+def record_robot_dispatch_acknowledgement(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    *,
+    dry_run: bool,
+    motion_started: bool,
+) -> Mission:
+    command_payload = {
+        "mission_id": mission_id,
+        "expected_version": expected_version,
+        "dry_run": dry_run,
+        "motion_started": motion_started,
+    }
+    if existing := _existing_command(session, command_id, "dispatch_robot", command_payload, mission_id):
+        return existing
+    mission = _mission(session, mission_id)
+    if (
+        mission.environment != Environment.STAGED
+        or mission.phase != Phase.READY_TO_DISPATCH
+        or mission.fulfilment_status not in {"PACKAGE_READY", "ROBOT_DRY_RUN_ACKNOWLEDGED"}
+    ):
+        return _replay_or_conflict(
+            session,
+            command_id,
+            "dispatch_robot",
+            command_payload,
+            mission_id,
+            "robot dispatch is blocked until staged PACKAGE_READY",
+        )
+    if dry_run and motion_started:
+        raise Conflict("robot cannot report motion during a dry run")
+    updates = {
+        "phase": Phase.EN_ROUTE_TO_PICKUP if motion_started else Phase.READY_TO_DISPATCH,
+        "fulfilment_status": "EN_ROUTE_TO_PICKUP" if motion_started else "ROBOT_DRY_RUN_ACKNOWLEDGED",
+    }
+    event_type = "PI_ROBOT_DISPATCHED" if motion_started else "PI_ROBOT_DRY_RUN_ACKNOWLEDGED"
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "dispatch_robot",
+        command_payload,
+        updates,
+        [(event_type, {"dry_run": dry_run, "motion_started": motion_started, "schema_version": 1})],
+    )
+
+
+def record_robot_lifecycle(
+    session: Session,
+    mission_id: str,
+    expected_version: int,
+    command_id: str,
+    *,
+    stage: str,
+    dry_run: bool,
+    motion_started: bool,
+) -> Mission:
+    command_payload = {
+        "mission_id": mission_id,
+        "expected_version": expected_version,
+        "stage": stage,
+        "dry_run": dry_run,
+        "motion_started": motion_started,
+    }
+    if existing := _existing_command(
+        session,
+        command_id,
+        "robot_lifecycle",
+        command_payload,
+        mission_id,
+    ):
+        return existing
+    mission = _mission(session, mission_id)
+    if mission.environment != Environment.STAGED or not dry_run or motion_started:
+        raise Conflict("only no-motion staged lifecycle reports are enabled")
+    transitions = {
+        "AT_PICKUP": (
+            Phase.READY_TO_DISPATCH,
+            {"phase": Phase.AT_PICKUP, "fulfilment_status": "DRY_RUN_AT_PICKUP"},
+        ),
+        "ITEM_SECURED": (
+            Phase.AT_PICKUP,
+            {"phase": Phase.ITEM_SECURED, "fulfilment_status": "DRY_RUN_ITEM_SECURED"},
+        ),
+        "RETURNING": (
+            Phase.ITEM_SECURED,
+            {"phase": Phase.RETURNING, "fulfilment_status": "DRY_RUN_RETURNING"},
+        ),
+        "COMPLETED": (
+            Phase.RETURNING,
+            {
+                "phase": Phase.COMPLETED,
+                "fulfilment_status": "DRY_RUN_COMPLETED",
+                "notification_status": "STAGED_COMPLETED",
+            },
+        ),
+    }
+    expected_phase, updates = transitions[stage]
+    if mission.phase != expected_phase:
+        return _replay_or_conflict(
+            session,
+            command_id,
+            "robot_lifecycle",
+            command_payload,
+            mission_id,
+            f"{stage} is not valid from {mission.phase}",
+        )
+    if (
+        stage == "AT_PICKUP"
+        and mission.fulfilment_status != "ROBOT_DRY_RUN_ACKNOWLEDGED"
+    ):
+        raise Conflict("robot lifecycle cannot start before its dry-run acknowledgement")
+    return _transition(
+        session,
+        mission_id,
+        expected_version,
+        command_id,
+        "robot_lifecycle",
+        command_payload,
+        updates,
+        [
+            (
+                f"PI_ROBOT_DRY_RUN_{stage}",
+                {
+                    "dry_run": True,
+                    "motion_started": False,
+                    "schema_version": 1,
+                },
+            )
         ],
     )
 

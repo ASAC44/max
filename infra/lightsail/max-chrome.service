@@ -1,0 +1,19 @@
+[Unit]
+Description=Max persistent Swiggy browser
+After=max-xvfb.service network-online.target
+Requires=max-xvfb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/google-chrome-stable --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/home/ubuntu/.local/share/max-swiggy-browser --no-first-run --disable-dev-shm-usage
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

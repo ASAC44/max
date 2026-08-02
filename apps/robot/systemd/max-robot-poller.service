@@ -1,0 +1,19 @@
+[Unit]
+Description=Max outbound mission poller (motion disabled)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/max-robot/poller.env
+ExecStart=%h/.local/bin/max-poller
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/max-robot
+
+[Install]
+WantedBy=default.target

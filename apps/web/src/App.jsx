@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import TeleopPanel from "./TeleopPanel.jsx";
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL
+  || (import.meta.env.PROD ? window.location.origin : "http://127.0.0.1:8000");
 
 const money = (minor, currency = "INR") =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(minor / 100);
@@ -15,6 +17,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [automationFailed, setAutomationFailed] = useState(false);
+  const [robotStatus, setRobotStatus] = useState(null);
   const paymentAutomation = useRef({ missionId: null, polling: false, checkoutStarted: false });
 
   const call = async (path, options = {}) => {
@@ -78,6 +81,60 @@ export default function App() {
     const id = new URLSearchParams(window.location.search).get("mission");
     if (id && token) run(() => call(`/api/missions/${id}`));
     // Token deliberately stays in memory and is never written to browser storage.
+  }, [token]);
+
+  useEffect(() => {
+    if (!mission || !token) return undefined;
+    const livePhases = [
+      "ORDER_CONFIRMED",
+      "READY_TO_DISPATCH",
+      "EN_ROUTE_TO_PICKUP",
+      "AT_PICKUP",
+      "ITEM_SECURED",
+      "RETURNING",
+    ];
+    if (!livePhases.includes(mission.phase)) return undefined;
+    let stopped = false;
+    const refreshMission = async () => {
+      try {
+        const next = await call("/api/missions/active");
+        if (!stopped) {
+          setMission(next);
+          const url = new URL(window.location.href);
+          url.searchParams.set("mission", next.id);
+          history.replaceState(null, "", url);
+        }
+      } catch {
+        // Keep the last authoritative state visible during a transient refresh failure.
+      }
+    };
+    const timer = window.setInterval(refreshMission, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [mission?.id, mission?.phase, token]);
+
+  useEffect(() => {
+    if (!token) {
+      setRobotStatus(null);
+      return undefined;
+    }
+    let stopped = false;
+    const refreshRobot = async () => {
+      try {
+        const next = await call("/api/robot/v1/status");
+        if (!stopped) setRobotStatus(next);
+      } catch {
+        if (!stopped) setRobotStatus(null);
+      }
+    };
+    refreshRobot();
+    const timer = window.setInterval(refreshRobot, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
   }, [token]);
 
   useEffect(() => {
@@ -218,6 +275,31 @@ export default function App() {
 
       {error && <p role="alert" className="error">{error}</p>}
 
+      {token && <TeleopPanel api={API} token={token} />}
+
+      {token && (
+        <section className="panel robot-health">
+          <div>
+            <p className="eyebrow">UNIFIED PI AGENT</p>
+            <strong>
+              {robotStatus?.connected
+                ? `${robotStatus.robot.robot_id} · ${robotStatus.robot.status}`
+                : "OFFLINE / HEARTBEAT STALE"}
+            </strong>
+          </div>
+          <span className="truth">
+            AUTONOMOUS MOTION {robotStatus?.motion_enabled ? "ENABLED" : "DISABLED"}
+          </span>
+          {robotStatus?.robot && (
+            <div className="subsystems">
+              {Object.entries(robotStatus.robot.subsystems).map(([name, state]) => (
+                <small key={name}>{name}: {state}</small>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       {mission && (
         <>
           <section className="status-grid">
@@ -265,9 +347,10 @@ export default function App() {
               {mission.environment === "staged_demo" && ["ORDER_CONFIRMED", "READY_TO_DISPATCH"].includes(mission.phase) && <button className="secondary" onClick={() => command("cancel")} disabled={busy}>Cancel staged mission</button>}
               {mission.phase === "CHECKOUT_OUTCOME_UNKNOWN" && <button className="secondary" onClick={closeUnresolved} disabled={busy}>Close unresolved mission</button>}
               {["PAYMENT_DECLINED", "COMPLETED", "CANCELLED", "CLOSED_UNRESOLVED"].includes(mission.phase) && <button className="secondary" onClick={clearMission} disabled={busy}>Start new mission</button>}
-              {mission.phase === "PAYMENT_DECLINED" && <button onClick={() => command("start-staged")} disabled={busy}>Create separate staged fulfilment</button>}
+              {["PAYMENT_DECLINED", "ORDER_CONFIRMED"].includes(mission.phase) && mission.environment !== "staged_demo" && <button onClick={() => command("start-staged")} disabled={busy}>Create separate staged fulfilment</button>}
               {mission.environment === "staged_demo" && mission.phase === "ORDER_CONFIRMED" && <button onClick={() => command("package-ready")} disabled={busy}>Record PACKAGE_READY</button>}
-              {mission.environment === "staged_demo" && mission.phase === "READY_TO_DISPATCH" && <button onClick={() => command("run-robot")} disabled={busy}>Run labeled robot simulation</button>}
+              {mission.environment === "staged_demo" && mission.phase === "READY_TO_DISPATCH" && !mission.robot_job && <button onClick={() => command("run-robot")} disabled={busy}>Send fail-closed Pi job</button>}
+              {mission.robot_job && <span>Pi job {mission.robot_job.status.toLowerCase()} · {mission.robot_job.trigger_source.toLowerCase()} trigger</span>}
             </div>
           </section>
 
@@ -279,6 +362,28 @@ export default function App() {
               </article>
             ))}
           </section>
+
+          {mission.commerce_status.startsWith("SWIGGY_") && (
+            <section className="panel live-order">
+              <p className="eyebrow">LIVE SWIGGY STATUS</p>
+              <h2>{mission.commerce_status.slice(7).replaceAll("_", " ")}</h2>
+              <p>Every distinct provider transition is stored in the timeline and forwarded to the Pi. Motor motion remains disabled.</p>
+            </section>
+          )}
+
+          {mission.source_order_events?.length > 0 && (
+            <section className="panel live-order">
+              <p className="eyebrow">SWIGGY DELIVERY TIMELINE</p>
+              <ol>
+                {mission.source_order_events.map((event) => (
+                  <li key={`${event.sequence}-${event.event_type}`}>
+                    <strong>{event.payload.normalized_status?.replaceAll("_", " ") || event.event_type.replaceAll("_", " ")}</strong>
+                    <small>{event.payload.eta_text || "ETA unavailable"} · {new Date(event.created_at).toLocaleTimeString()}</small>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
 
           <section className="panel timeline">
             <div className="section-title"><div><p className="eyebrow">AUTHORITATIVE EVENT LOG</p><h2>Timeline</h2></div><button className="secondary" onClick={() => run(() => call(`/api/missions/${mission.id}`))} disabled={busy}>Refresh</button></div>

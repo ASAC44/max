@@ -1,0 +1,24 @@
+[Unit]
+Description=Unified Max robot backend agent (fail-closed)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+EnvironmentFile=/etc/max-robot/agent.env
+Environment=MAX_ROBOT_AGENT_STATE_FILE=/var/lib/max-robot/agent.json
+ExecStart=/opt/max-robot/venv/bin/max-agent
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/max-robot
+StateDirectory=max-robot
+
+[Install]
+WantedBy=multi-user.target

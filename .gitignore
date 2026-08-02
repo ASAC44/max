@@ -5,6 +5,8 @@ install/
 log/
 .pytest_cache/
 .env
+.env.*
+!.env.example
 *.sqlite3
 .venv/
 node_modules/

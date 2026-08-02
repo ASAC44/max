@@ -15,13 +15,35 @@ from mcp.client.stdio import stdio_client
 from mcp.types import TextContent
 from playwright.async_api import async_playwright
 
-from .config import checkout_timeout_seconds, swiggy_cardholder_name, swiggy_cdp_url
+from .config import (
+    checkout_timeout_seconds,
+    prava_environment,
+    robot_token,
+    robot_url,
+    swiggy_cardholder_name,
+    swiggy_cdp_url,
+)
 from .models import utcnow
 from .schemas import Environment, ProviderResult, Quote, QuoteLine, ShoppingIntent
 
 
 class IntegrationError(RuntimeError):
     """A safe external-integration error whose message contains no provider data."""
+
+
+class SwiggyConnectionError(IntegrationError):
+    """A transient MCP transport failure before merchant checkout."""
+
+
+def _nested_integration_error(exc: BaseException) -> IntegrationError | None:
+    """Recover a safe provider error wrapped by an AnyIO task group."""
+    if isinstance(exc, IntegrationError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for child in exc.exceptions:
+            if nested := _nested_integration_error(child):
+                return nested
+    return None
 
 
 @dataclass(frozen=True)
@@ -48,8 +70,82 @@ class PravaCredential:
     expiry_year: str = dataclass_field(repr=False)
 
 
+@dataclass(frozen=True)
+class RobotDispatchAck:
+    mission_id: str
+    command_id: str
+    status: str
+    dry_run: bool
+    motion_started: bool
+
+
+@dataclass(frozen=True)
+class SwiggyOrderSnapshot:
+    provider_order_id: str
+    raw_status: str
+    eta_text: str | None = None
+
+
 class BrowserCheckoutError(IntegrationError):
     """A safe failure raised only before the merchant submit click."""
+
+
+class RobotClient:
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
+        self.transport = transport
+
+    async def dispatch(
+        self,
+        *,
+        mission_id: str,
+        command_id: str,
+        destination: str,
+        dry_run: bool,
+    ) -> RobotDispatchAck:
+        payload = {
+            "schema_version": 1,
+            "mission_id": mission_id,
+            "command_id": command_id,
+            "destination": destination,
+            "dry_run": dry_run,
+        }
+        try:
+            async with httpx.AsyncClient(
+                base_url=robot_url(),
+                transport=self.transport,
+                timeout=5,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    "/api/v1/missions/dispatch",
+                    headers={"Authorization": f"Bearer {robot_token()}"},
+                    json=payload,
+                )
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise IntegrationError("Pi robot bridge connection failed") from exc
+        if response.status_code != 200:
+            raise IntegrationError("Pi robot bridge rejected the mission")
+        try:
+            data = response.json()
+            ack = RobotDispatchAck(
+                mission_id=data["mission_id"],
+                command_id=data["command_id"],
+                status=data["status"],
+                dry_run=data["dry_run"],
+                motion_started=data["motion_started"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise IntegrationError("Pi robot bridge returned an invalid acknowledgement") from exc
+        if (
+            ack.mission_id != mission_id
+            or ack.command_id != command_id
+            or ack.status != "ACKNOWLEDGED"
+            or ack.dry_run != dry_run
+        ):
+            raise IntegrationError("Pi robot bridge acknowledgement did not match the command")
+        if dry_run and ack.motion_started:
+            raise IntegrationError("Pi robot bridge reported motion during a dry run")
+        return ack
 
 
 def _minor(value: Any) -> int:
@@ -126,11 +222,248 @@ def _tool_arguments(tool: Any, values: dict[str, Any]) -> dict[str, Any]:
 class SwiggyClient:
     endpoint = "https://mcp.swiggy.com/im"
 
-    async def quote(self, intent: ShoppingIntent) -> Quote:
-        server = StdioServerParameters(
-            command="npx",
-            args=["--yes", "mcp-remote", self.endpoint],
+    @classmethod
+    def _server(cls) -> StdioServerParameters:
+        # The container installs a version-pinned bridge. Invoking it directly
+        # avoids an npm registry lookup and an unreviewed package update in the
+        # middle of an owner request.
+        return StdioServerParameters(command="mcp-remote", args=[cls.endpoint])
+
+    async def readiness(self) -> dict[str, Any]:
+        required = {
+            "get_addresses",
+            "search_products",
+            "update_cart",
+            "get_cart",
+            "clear_cart",
+            "get_orders",
+            "track_order",
+        }
+        server = self._server()
+        try:
+            async with asyncio.timeout(30):
+                async with stdio_client(server, errlog=subprocess.DEVNULL) as (
+                    read,
+                    write,
+                ):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        available = {
+                            tool.name for tool in (await session.list_tools()).tools
+                        }
+        except Exception as exc:
+            if nested := _nested_integration_error(exc):
+                raise nested from exc
+            raise IntegrationError(
+                "Swiggy MCP readiness failed; complete OAuth in the deployed OS user"
+            ) from exc
+        missing = sorted(required - available)
+        if missing:
+            raise IntegrationError("Swiggy MCP is missing required Instamart tools")
+        return {
+            "connected": True,
+            "required_tools_present": True,
+            "tool_count": len(available),
+        }
+
+    async def order_snapshot(
+        self,
+        *,
+        provider_order_id: str | None,
+        quote: Quote,
+    ) -> SwiggyOrderSnapshot:
+        """Read and minimally normalize one order without retaining raw PII."""
+        server = self._server()
+        try:
+            async with stdio_client(server, errlog=subprocess.DEVNULL) as (
+                read,
+                write,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools = {
+                        tool.name: tool for tool in (await session.list_tools()).tools
+                    }
+                    if "get_orders" not in tools:
+                        raise IntegrationError(
+                            "Swiggy MCP is missing the required get_orders status tool"
+                        )
+                    if provider_order_id and "track_order" in tools:
+                        payload = _tool_payload(
+                            await session.call_tool(
+                                "track_order",
+                                _tool_arguments(
+                                    tools["track_order"],
+                                    {
+                                        "orderId": provider_order_id,
+                                        "order_id": provider_order_id,
+                                        "id": provider_order_id,
+                                    },
+                                ),
+                            )
+                        )
+                    else:
+                        payload = _tool_payload(
+                            await session.call_tool(
+                                "get_orders",
+                                _tool_arguments(tools["get_orders"], {}),
+                            )
+                        )
+        except IntegrationError:
+            raise
+        except Exception as exc:
+            if nested := _nested_integration_error(exc):
+                raise nested from exc
+            raise IntegrationError(
+                "Swiggy order status connection failed; complete OAuth setup and retry"
+            ) from exc
+        return self._select_order_snapshot(payload, provider_order_id, quote)
+
+    @staticmethod
+    def _order_id(value: dict[str, Any]) -> str | None:
+        for node in _dicts(value):
+            candidate = _text(
+                node,
+                "orderId",
+                "order_id",
+                "orderID",
+                "orderNumber",
+                "order_number",
+            )
+            if candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _order_status(value: dict[str, Any]) -> str | None:
+        specific = (
+            "orderStatus",
+            "order_status",
+            "deliveryStatus",
+            "delivery_status",
+            "statusText",
+            "status_text",
         )
+        for node in _dicts(value):
+            if candidate := _text(node, *specific):
+                return candidate
+        return _text(value, "status")
+
+    @staticmethod
+    def _order_amount(value: dict[str, Any]) -> int | None:
+        for key in (
+            "orderTotal",
+            "order_total",
+            "totalAmount",
+            "total_amount",
+            "cartTotalAmount",
+        ):
+            candidate = _find(value, key)
+            if candidate is not None:
+                try:
+                    return _minor(candidate)
+                except IntegrationError:
+                    return None
+        return None
+
+    @staticmethod
+    def _order_item_names(value: dict[str, Any]) -> list[str]:
+        names: list[str] = []
+        for node in _dicts(value):
+            candidate = _text(
+                node,
+                "displayName",
+                "productName",
+                "itemName",
+                "name",
+                "title",
+            )
+            if candidate and candidate not in names:
+                names.append(candidate)
+        return names[:50]
+
+    @classmethod
+    def _select_order_snapshot(
+        cls,
+        payload: dict[str, Any],
+        provider_order_id: str | None,
+        quote: Quote,
+    ) -> SwiggyOrderSnapshot:
+        candidates = _list(payload, "orders")
+        if not candidates:
+            candidates = [
+                node
+                for node in _dicts(payload)
+                if cls._order_id(node) and cls._order_status(node)
+            ]
+        if (
+            provider_order_id
+            and not candidates
+            and cls._order_status(payload)
+        ):
+            candidates = [payload]
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            order_id = cls._order_id(candidate) or provider_order_id
+            if order_id and order_id not in seen:
+                seen.add(order_id)
+                unique.append(candidate)
+        candidates = unique
+
+        if provider_order_id:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if cls._order_id(candidate) in {None, provider_order_id}
+            ]
+        else:
+            matching: list[dict[str, Any]] = []
+            wanted = quote.product_name.casefold()
+            for candidate in candidates:
+                amount = cls._order_amount(candidate)
+                names = cls._order_item_names(candidate)
+                if amount is None and not names:
+                    continue
+                if amount is not None and amount != quote.amount_minor:
+                    continue
+                if names and not any(
+                    wanted in name.casefold() or name.casefold() in wanted
+                    for name in names
+                ):
+                    continue
+                matching.append(candidate)
+            candidates = matching
+
+        if len(candidates) != 1:
+            raise IntegrationError(
+                "Swiggy order status could not be correlated to exactly one approved order"
+            )
+        selected = candidates[0]
+        order_id = provider_order_id or cls._order_id(selected)
+        raw_status = cls._order_status(selected)
+        if not order_id or not raw_status:
+            raise IntegrationError("Swiggy returned an incomplete order status")
+        eta = None
+        for node in _dicts(selected):
+            eta = _text(
+                node,
+                "eta",
+                "etaText",
+                "eta_text",
+                "deliveryEta",
+                "delivery_eta",
+            )
+            if eta:
+                break
+        return SwiggyOrderSnapshot(
+            provider_order_id=order_id[:128],
+            raw_status=raw_status[:80],
+            eta_text=eta[:80] if eta else None,
+        )
+
+    async def quote(self, intent: ShoppingIntent) -> Quote:
+        server = self._server()
         try:
             async with stdio_client(server, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
@@ -193,7 +526,11 @@ class SwiggyClient:
         except IntegrationError:
             raise
         except Exception as exc:
-            raise IntegrationError("Swiggy MCP connection failed; complete OAuth setup and retry") from exc
+            if nested := _nested_integration_error(exc):
+                raise nested from exc
+            raise SwiggyConnectionError(
+                "Swiggy MCP connection failed; complete OAuth setup and retry"
+            ) from exc
 
         if intent.budget_max_minor is not None and total > intent.budget_max_minor:
             raise IntegrationError("Swiggy quote exceeds the owner's maximum budget")
@@ -217,7 +554,7 @@ class SwiggyClient:
 
     async def verify_quote(self, quote: Quote) -> None:
         """Re-read the live cart immediately before the one-shot browser submit."""
-        server = StdioServerParameters(command="npx", args=["--yes", "mcp-remote", self.endpoint])
+        server = self._server()
         try:
             async with stdio_client(server, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
@@ -238,6 +575,8 @@ class SwiggyClient:
         except IntegrationError:
             raise
         except Exception as exc:
+            if nested := _nested_integration_error(exc):
+                raise nested from exc
             raise IntegrationError("Swiggy cart verification failed; do not submit payment") from exc
 
         self._assert_cart_serviceable(cart)
@@ -260,7 +599,10 @@ class SwiggyClient:
         addresses = _list(payload, "addresses")
         if not addresses:
             raise IntegrationError("Swiggy account has no saved serviceable address")
-        wanted = "work" if destination.lower() == "office" else destination.lower()
+        wanted = re.sub(r"\s+", " ", destination.strip().lower())
+        wanted = re.sub(r"^(?:my\s+)?saved\s+", "", wanted)
+        wanted = re.sub(r"\s+address$", "", wanted)
+        wanted = "work" if wanted == "office" else wanted
         for address in addresses:
             label = _text(address, "addressCategory", "label", "type")
             if label and label.lower() == wanted:
@@ -319,12 +661,58 @@ class PravaClient:
         self.user_email = os.getenv("PRAVA_USER_EMAIL", "")
         self.callback_url = os.getenv("PRAVA_CALLBACK_URL", "")
         self.transport = transport
-        if not self.secret.startswith("sk_test_"):
-            raise IntegrationError("PRAVA_SECRET_KEY must be a sandbox sk_test key")
+        try:
+            self.environment = prava_environment()
+        except RuntimeError as exc:
+            raise IntegrationError(str(exc)) from exc
+        self.base_url = (
+            "https://sandbox.api.prava.space"
+            if self.environment == "sandbox"
+            else "https://api.prava.space"
+        )
+        self.approval_host = (
+            "sandbox.collect.prava.space"
+            if self.environment == "sandbox"
+            else "checkout.prava.space"
+        )
         if not self.user_id or not self.user_email:
             raise IntegrationError("PRAVA_USER_ID and PRAVA_USER_EMAIL are required")
         if self.callback_url and urlparse(self.callback_url).scheme != "https":
             raise IntegrationError("PRAVA_CALLBACK_URL must be empty or HTTPS for hosted checkout")
+
+    async def readiness(self) -> dict[str, Any]:
+        """Check the configured service without creating a payment session."""
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=10,
+                transport=self.transport,
+                trust_env=False,
+            ) as client:
+                response = await client.get("/health")
+        except httpx.HTTPError as exc:
+            raise IntegrationError("Prava health check failed") from exc
+        if response.status_code != 200:
+            raise IntegrationError("Prava health check was rejected")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise IntegrationError("Prava health response was unreadable") from exc
+        if not isinstance(body, dict) or body.get("status") != "ok":
+            raise IntegrationError("Prava health response was unexpected")
+        return {
+            "configured": True,
+            "connected": True,
+            "environment": self.environment,
+            "money_mode": (
+                "test_only" if self.environment == "sandbox" else "live"
+            ),
+            "credential_validation": (
+                "run explicit sandbox session smoke"
+                if self.environment == "sandbox"
+                else "production key accepted; run an explicitly authorized live checkout"
+            ),
+        }
 
     async def create_session(self, quote: Quote) -> PravaSession:
         lines = quote.line_items or [QuoteLine(
@@ -364,8 +752,8 @@ class PravaClient:
         except (KeyError, TypeError) as exc:
             raise IntegrationError("Prava session response is incomplete") from exc
         parsed = urlparse(result.approval_url)
-        if parsed.scheme != "https" or parsed.hostname != "sandbox.collect.prava.space":
-            raise IntegrationError("Prava returned an unexpected sandbox approval URL")
+        if parsed.scheme != "https" or parsed.hostname != self.approval_host:
+            raise IntegrationError("Prava returned an unexpected approval URL")
         return result
 
     async def payment_state(self, session_id: str) -> PravaPaymentState:
@@ -381,6 +769,11 @@ class PravaClient:
                 "token", "dynamic_cvv", "expiry_month", "expiry_year"
             )),
         )
+
+    async def revoke_session(self, session_id: str) -> None:
+        data = await self._request("POST", f"/v1/sessions/{session_id}/revoke")
+        if data.get("success") is not True:
+            raise IntegrationError("Prava did not confirm payment-session revocation")
 
     async def credential(self, session_id: str) -> PravaCredential:
         data = await self._request("GET", f"/v1/sessions/{session_id}/payment-result")
@@ -430,18 +823,19 @@ class PravaClient:
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(
-                base_url="https://sandbox.api.prava.space",
+                base_url=self.base_url,
                 headers={"Authorization": f"Bearer {self.secret}"},
                 timeout=20,
                 transport=self.transport,
+                trust_env=False,
             ) as client:
                 response = await client.request(method, path, **kwargs)
         except httpx.HTTPError as exc:
-            raise IntegrationError("Prava sandbox connection failed") from exc
+            raise IntegrationError("Prava connection failed") from exc
         if response.status_code >= 400:
             response_id = response.headers.get("X-Response-ID")
             suffix = f"; response ID {response_id}" if response_id else ""
-            raise IntegrationError(f"Prava sandbox rejected the request{suffix}")
+            raise IntegrationError(f"Prava rejected the request{suffix}")
         try:
             data = response.json()
         except ValueError as exc:
@@ -480,6 +874,27 @@ class SwiggyBrowserCheckout:
         re.I,
     )
     _approved = re.compile(r"order (?:has been )?(?:placed|confirmed)|order successful|thank you for your order", re.I)
+
+    async def readiness(self) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(
+                base_url=swiggy_cdp_url(),
+                timeout=5,
+                trust_env=False,
+            ) as client:
+                response = await client.get("/json/version")
+                response.raise_for_status()
+                value = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise IntegrationError("Swiggy browser CDP readiness failed") from exc
+        browser = value.get("Browser")
+        if not isinstance(browser, str) or not browser.startswith("Chrome/"):
+            raise IntegrationError("Swiggy browser CDP returned an unexpected browser")
+        return {
+            "connected": True,
+            "browser": browser,
+            "loopback_only": True,
+        }
 
     @staticmethod
     async def _visible(frames, selectors):

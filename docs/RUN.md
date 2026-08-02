@@ -10,9 +10,18 @@ unless a section says otherwise.
 - Mission Control on `http://127.0.0.1:5173`
 - A separate Chromium profile logged into Swiggy for the final checkout form
 - Swiggy Instamart MCP through `mcp-remote`; its OAuth login is cached per OS user
+- Optionally, an authenticated dry-run mission bridge on the Raspberry Pi
+- Optionally, the owner-only Telegram worker and outbound Pi poller described
+  in [TELEGRAM-BACKEND.md](TELEGRAM-BACKEND.md)
+- The current credit-guarded AWS deployment is documented in
+  [AWS-DEPLOYMENT.md](AWS-DEPLOYMENT.md)
+- The single-service cloud/Pi runtime and physical safety gates are documented
+  in [UNIFIED-RUNTIME.md](UNIFIED-RUNTIME.md)
+- Authenticated real-time keyboard control and its fail-safe operating procedure
+  are documented in [REMOTE-TELEOP.md](REMOTE-TELEOP.md)
 
 The development script starts the first two services. Browser login, OAuth,
-Prava verification, and secrets remain manual.
+Prava verification, Pi bridge deployment, and secrets remain manual.
 
 ## Requirements
 
@@ -42,6 +51,7 @@ For the real hackathon flow, set:
 MAX_AGENT_MODE=openai
 MAX_COMMERCE_MODE=swiggy
 MAX_PAYMENT_MODE=prava
+MAX_PURCHASE_ENABLED=false
 
 OPENAI_API_KEY=your-key
 OPENAI_MODEL=the-model-the-team-has-validated
@@ -54,6 +64,11 @@ PRAVA_CALLBACK_URL=
 
 SWIGGY_CDP_URL=http://127.0.0.1:9222
 SWIGGY_CARDHOLDER_NAME=the-name-entered-on-the-card-form
+
+MAX_ROBOT_MODE=pi
+MAX_ROBOT_URL=http://the-private-pi-address:8081
+MAX_ROBOT_TOKEN=a-separate-random-secret-at-least-24-characters-long
+MAX_ROBOT_DRY_RUN=true
 ```
 
 Keep `PRAVA_CALLBACK_URL` empty for local polling. Set it only when you have a
@@ -61,6 +76,45 @@ stable public HTTPS URL ending in `/api/payments/prava/complete`.
 
 Never commit `.env`, card details, CVVs, OTPs, Prava credentials, OAuth tokens,
 or the dedicated browser profile. Transfer team secrets privately.
+
+### Configure the Pi mission bridge
+
+The bridge is deliberately acknowledgement-only. It persists a versioned
+mission command but refuses physical motion. This proves the backend-to-Pi
+contract without claiming that unvalidated navigation is safe.
+
+Copy these files to the Pi under the same paths used by the service:
+
+```text
+apps/robot/max_robot/bridge.py
+  → ~/.local/lib/max_robot_bridge.py
+
+apps/robot/systemd/max-robot-bridge.service
+  → ~/.config/systemd/user/max-robot-bridge.service
+```
+
+Create `~/.config/max-robot/bridge.env` with mode `0600`:
+
+```env
+MAX_ROBOT_TOKEN=the-same-separate-secret-used-by-the-Max-API
+MAX_BRIDGE_ALLOWED_CLIENT=the-private-IP-of-the-Max-API-machine
+```
+
+Then start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now max-robot-bridge.service
+```
+
+Do not enable the Pi drive service as part of this setup. A successful dry-run
+acknowledgement reports `motion_started=false` and leaves the mission at
+`READY_TO_DISPATCH`. Physical motion requires a separately validated navigation
+contract and is not enabled by this bridge.
+
+For a public backend, prefer the outbound Pi poller to this inbound LAN bridge.
+The backend deployment, Telegram webhook, worker, and poller setup are documented
+in [TELEGRAM-BACKEND.md](TELEGRAM-BACKEND.md).
 
 ### Complete Swiggy MCP OAuth
 
@@ -136,6 +190,7 @@ mission slot.
 
 ```bash
 curl http://127.0.0.1:8000/api/health
+curl http://the-private-pi-address:8081/api/v1/health
 ```
 
 The expected response reports a healthy API. The dashboard should load at
@@ -179,3 +234,6 @@ For the next session:
 - **Checkout outcome unknown:** do not retry payment. Close the mission as
   unresolved, inspect Swiggy/Prava independently, and begin a fresh mission only
   after understanding the result.
+- **Pi bridge rejects the command:** verify `MAX_ROBOT_TOKEN` matches on both
+  machines, `MAX_BRIDGE_ALLOWED_CLIENT` is the Mac's current private address,
+  and ambient HTTP proxy settings are not routing private-subnet traffic.

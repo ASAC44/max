@@ -164,6 +164,10 @@ If you prefer to run from source:
 `pay_now` is disabled by default. Set `BLINKIT_PAYMENT_SUBMISSION_ENABLED=true`
 only for an explicitly confirmed submission attempt.
 
+IP-derived location lookup is also disabled by default because it contacts a
+third-party geolocation service. Set `BLINKIT_IP_GEOLOCATION_ENABLED=true` only
+if that disclosure is acceptable; otherwise use `set_location` manually.
+
 ---
 
 ## 💬 Example Queries

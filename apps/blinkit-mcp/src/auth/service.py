@@ -23,17 +23,22 @@ class BlinkitAuth:
 
         geolocation = None
 
-        try:
-            from src.utils.geo import get_current_location
+        if os.environ.get("BLINKIT_IP_GEOLOCATION_ENABLED", "false").lower() == "true":
+            try:
+                from src.utils.geo import get_current_location
 
-            detected_loc = get_current_location()
-            if detected_loc:
-                print(f"Using detected location: {detected_loc}")
-                geolocation = detected_loc
-            else:
-                print("Could not detect location. Select a delivery location manually.")
-        except Exception as e:
-            print(f"Error initializing location detection: {e}.")
+                detected_loc = get_current_location()
+                if detected_loc:
+                    print("Using IP-derived location.")
+                    geolocation = detected_loc
+                else:
+                    print(
+                        "Could not detect location. Select a delivery location manually."
+                    )
+            except Exception as e:
+                print(f"Error initializing location detection: {e}.")
+        else:
+            print("IP-derived location lookup is disabled.")
 
         context_options = {}
         if geolocation:

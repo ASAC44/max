@@ -12,7 +12,14 @@ dependencies = [
   "playwright>=1.50",
   "sqlalchemy>=2.0",
   "uvicorn>=0.35",
+  "websockets>=16,<17",
 ]
+
+[project.scripts]
+max-telegram-worker = "max_api.telegram:main"
+max-telegram-setup = "max_api.telegram_setup:main"
+max-provider-smoke = "max_api.provider_smoke:main"
+max-order-sync-worker = "max_api.order_sync:main"
 
 [project.optional-dependencies]
 dev = [

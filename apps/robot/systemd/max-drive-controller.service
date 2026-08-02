@@ -1,0 +1,27 @@
+[Unit]
+Description=Max BTS7960 drive and horn controller
+After=network-online.target max-teleop-agent.service
+Wants=network-online.target
+Requires=max-teleop-agent.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+SupplementaryGroups=input gpio audio
+EnvironmentFile=/etc/max-robot/agent.env
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+RuntimeDirectory=max-drive
+RuntimeDirectoryMode=0700
+WorkingDirectory=/run/max-drive
+ExecStart=/opt/max-robot/venv/bin/max-drive-controller
+Restart=always
+RestartSec=2
+TimeoutStopSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,7 @@ from max_api.workflow import (
     recover_in_progress_attempts,
     record_prava_payment_state,
     record_prava_session,
+    record_robot_dispatch_acknowledgement,
     requote,
     retry_allowed,
     run_robot_simulation,
@@ -163,6 +164,31 @@ def test_decline_and_staged_branch_preserve_separate_truth(session):
         (Phase.RETURNING, Phase.COMPLETED),
     ]
     assert all(event.environment == "local" for event in child_events if event.component in {"robot", "notification"})
+
+
+def test_pi_robot_dry_run_acknowledgement_does_not_claim_motion(session):
+    declined = complete_decline(session)
+    child = start_staged_fulfilment(session, declined.id, declined.version, "pi-stage")
+    child = package_ready(session, child.id, child.version, "pi-package")
+    acknowledged = record_robot_dispatch_acknowledgement(
+        session,
+        child.id,
+        child.version,
+        "pi-dispatch",
+        dry_run=True,
+        motion_started=False,
+    )
+    assert acknowledged.phase == Phase.READY_TO_DISPATCH
+    assert acknowledged.fulfilment_status == "ROBOT_DRY_RUN_ACKNOWLEDGED"
+    event = session.scalar(select(Event).where(
+        Event.mission_id == child.id,
+        Event.event_type == "PI_ROBOT_DRY_RUN_ACKNOWLEDGED",
+    ))
+    assert (event.component, event.provider, event.environment) == (
+        "robot",
+        "PI_ROBOT_BRIDGE",
+        "staged_demo",
+    )
 
 
 def test_unknown_checkout_is_not_retryable(session):

@@ -1,0 +1,106 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    network_mode: host
+    env_file:
+      - .env
+      - .env.telegram
+    environment:
+      MAX_DATABASE_URL: sqlite:////data/max.db
+      MAX_CONTROL_API_URL: http://127.0.0.1:8000
+      MCP_REMOTE_CONFIG_DIR: /root/.mcp-auth
+      MAX_ORDER_SYNC_STATE_FILE: /data/order-sync-worker.json
+      MAX_TELEOP_STATE_FILE: /data/teleop-state.json
+    volumes:
+      - max-data:/data
+      - mcp-auth:/root/.mcp-auth
+    command:
+      - /bin/sh
+      - -c
+      - alembic upgrade head && uvicorn max_api.main:app --host 127.0.0.1 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  telegram-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    network_mode: host
+    env_file:
+      - .env
+      - .env.telegram
+    environment:
+      MAX_DATABASE_URL: sqlite:////data/max.db
+      MAX_CONTROL_API_URL: http://127.0.0.1:8000
+    volumes:
+      - max-data:/data
+    command: ["max-telegram-worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  order-sync-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    network_mode: host
+    env_file: .env
+    environment:
+      MAX_DATABASE_URL: sqlite:////data/max.db
+      MCP_REMOTE_CONFIG_DIR: /root/.mcp-auth
+      MAX_ORDER_SYNC_STATE_FILE: /data/order-sync-worker.json
+    volumes:
+      - max-data:/data
+      - mcp-auth:/root/.mcp-auth
+    command: ["max-order-sync-worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    network_mode: host
+    command:
+      - npm
+      - --prefix
+      - /opt/max/apps/web
+      - run
+      - preview
+      - --
+      - --port
+      - "5173"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  max-data:
+  mcp-auth:
+  caddy-data:
+  caddy-config:

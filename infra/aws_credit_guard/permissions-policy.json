@@ -1,0 +1,42 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "freetier:GetAccountPlanState",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "lightsail:GetStaticIp",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lightsail:DeleteInstance",
+        "lightsail:DetachStaticIp",
+        "lightsail:ReleaseStaticIp"
+      ],
+      "Resource": [
+        "arn:aws:lightsail:ap-south-1:651592873730:Instance/*",
+        "arn:aws:lightsail:ap-south-1:651592873730:StaticIp/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "Max",
+          "aws:ResourceTag/BillingGuard": "credit-only"
+        }
+      }
+    }
+  ]
+}

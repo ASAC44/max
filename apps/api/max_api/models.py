@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -34,7 +34,7 @@ class Mission(Base):
     quote: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     quote_hash: Mapped[str | None] = mapped_column(String(64))
     approval_quote_hash: Mapped[str | None] = mapped_column(String(64))
-    commerce_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    commerce_status: Mapped[str] = mapped_column(String(48), nullable=False)
     payment_status: Mapped[str] = mapped_column(String(32), nullable=False)
     checkout_status: Mapped[str] = mapped_column(String(32), nullable=False)
     fulfilment_status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -88,3 +88,85 @@ class ExternalAttempt(Base):
     retry_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TelegramUpdate(Base):
+    __tablename__ = "telegram_updates"
+    __table_args__ = (
+        Index("ix_telegram_updates_status_created", "status", "created_at"),
+    )
+
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_text: Mapped[str | None] = mapped_column(Text)
+    callback_query_id: Mapped[str | None] = mapped_column(String(128))
+    callback_data: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING")
+    mission_id: Mapped[str | None] = mapped_column(ForeignKey("missions.id", ondelete="SET NULL"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_class: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TelegramNotification(Base):
+    __tablename__ = "telegram_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "mission_id",
+            "mission_version",
+            "kind",
+            name="uq_telegram_notification_mission_version_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mission_id: Mapped[str] = mapped_column(
+        ForeignKey("missions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    mission_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class RobotJob(Base):
+    __tablename__ = "robot_jobs"
+    __table_args__ = (
+        UniqueConstraint("mission_id", name="uq_robot_job_mission"),
+        Index("ix_robot_jobs_status_created", "status", "created_at"),
+    )
+
+    command_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(
+        ForeignKey("missions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    destination: Mapped[str] = mapped_column(String(100), nullable=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trigger_source: Mapped[str] = mapped_column(String(24), nullable=False, default="OPERATOR")
+    trigger_status: Mapped[str] = mapped_column(String(48), nullable=False, default="PACKAGE_READY")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RobotNode(Base):
+    __tablename__ = "robot_nodes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    subsystems: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    last_error: Mapped[str | None] = mapped_column(String(128))
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )

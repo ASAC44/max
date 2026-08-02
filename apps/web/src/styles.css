@@ -6,6 +6,8 @@ button { border: 0; border-radius: 999px; background: #9cff8c; color: #0a190c; p
 button:hover { background: #c0ffb6; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 button.secondary { color: #d7e4d9; background: #1b2420; border: 1px solid #35443b; }
+button.danger-button { color: #fff; background: #b92f24; }
+button.danger-button:hover { background: #dc4438; }
 main { width: min(1180px, calc(100% - 2rem)); margin: auto; padding: 2rem 0 5rem; }
 header, .section-title { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 h1, h2, h3, p { margin-top: 0; }
@@ -19,6 +21,36 @@ label span { opacity: .65; }
 input { width: 100%; margin-top: .45rem; border: 1px solid #34463b; border-radius: .7rem; color: #f3fff5; background: #0c1210; padding: .8rem; outline: none; }
 input:focus { border-color: #9cff8c; box-shadow: 0 0 0 3px rgba(156,255,140,.1); }
 .error { padding: .9rem 1rem; color: #ffd0ca; background: #4b1d18; border-radius: .7rem; }
+.robot-health { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 1rem; margin-top: 1rem; }
+.robot-health p { margin-bottom: .35rem; }
+.subsystems { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .5rem; }
+.subsystems small { border: 1px solid #35443b; border-radius: 999px; padding: .35rem .55rem; }
+.teleop { margin-top: 1rem; border-color: #375243; transition: border-color .2s, box-shadow .2s; }
+.teleop-capturing { border-color: #9cff8c; box-shadow: 0 0 0 3px rgba(156, 255, 140, .08), 0 18px 60px rgba(0,0,0,.2); }
+.teleop-heading { display: flex; justify-content: space-between; gap: 1.5rem; }
+.teleop-heading h2 { margin-bottom: .4rem; }
+.teleop-copy { margin-bottom: 0; max-width: 42rem; color: #9caf9f; }
+.teleop-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; align-content: flex-start; gap: .45rem; }
+.status-dot { border: 1px solid #4a332f; border-radius: 999px; color: #d9aaa2; padding: .4rem .6rem; font: 600 .68rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; }
+.status-dot.good { color: #9cff8c; border-color: #4c6d52; }
+.status-dot.danger { color: #ff9d91; border-color: #90483f; }
+.teleop-layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 1rem; margin-top: 1.25rem; }
+.key-map { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .6rem; }
+.key-command { min-height: 6rem; border: 1px solid #35443b; border-radius: .8rem; padding: .75rem; display: flex; flex-direction: column; justify-content: space-between; background: #0c1210; }
+.key-command kbd { align-self: flex-start; min-width: 2.2rem; text-align: center; border: 1px solid #516358; border-bottom-width: 3px; border-radius: .4rem; padding: .35rem .45rem; color: #edf9ef; background: #18211d; font: 700 .75rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+.key-command span { color: #88a48f; font-size: .75rem; }
+.key-command.active { border-color: #9cff8c; background: rgba(76, 109, 82, .3); }
+.key-command.active kbd { color: #0a190c; background: #9cff8c; border-color: #9cff8c; }
+.teleop-state { border-left: 1px solid #2d3b33; padding-left: 1rem; }
+.teleop-state dl { margin: 0; }
+.teleop-state dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid #26332c; }
+.teleop-state dt { color: #88a48f; }
+.teleop-state dd { margin: 0; text-align: right; font: 600 .75rem ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.teleop-actions { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: 1rem; }
+.teleop-actions button { padding: .65rem .85rem; font-size: .8rem; }
+.teleop-error, .teleop-warning { margin: 1rem 0 0; padding: .7rem .8rem; border-radius: .6rem; }
+.teleop-error { color: #ffd0ca; background: #4b1d18; }
+.teleop-warning { color: #ffdb9c; background: #423315; }
 .status-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; margin-top: 1rem; }
 .hero h2 { font-size: clamp(1.7rem, 5vw, 3.2rem); letter-spacing: -.05em; margin-bottom: .7rem; }
 .badges { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 2rem; }
@@ -34,9 +66,19 @@ input:focus { border-color: #9cff8c; box-shadow: 0 0 0 3px rgba(156,255,140,.1);
 .provider p { color: #88a48f; margin-bottom: .5rem; text-transform: uppercase; font: .7rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .provider strong { font-size: .83rem; overflow-wrap: anywhere; }
 .timeline { margin-top: 1rem; }
+.live-order { margin-top: 1rem; border-color: #3b6d4a; }
+.live-order h2 { margin-bottom: .35rem; color: #9cff8c; }
+.live-order ol { margin: 1rem 0 0; padding-left: 1.25rem; }
+.live-order li { padding: .35rem 0; }
+.live-order li small { display: block; margin-top: .15rem; }
 .timeline h2 { margin-bottom: 0; }
 .timeline ol { list-style: none; padding: 0; margin: 1.5rem 0 0; }
 .timeline li { display: grid; grid-template-columns: 2.5rem 1fr; gap: 1rem; border-top: 1px solid #26332c; padding: 1rem 0; }
 .timeline li > span { color: #9cff8c; font: .8rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .timeline small { display: block; margin-top: .3rem; }
-@media (max-width: 800px) { .compose, .status-grid { grid-template-columns: 1fr; } .provider-grid { grid-template-columns: repeat(2, 1fr); } header { align-items: flex-end; } }
+@media (max-width: 900px) {
+  .teleop-heading, .teleop-layout { grid-template-columns: 1fr; display: grid; }
+  .teleop-badges { justify-content: flex-start; }
+  .teleop-state { border-left: 0; border-top: 1px solid #2d3b33; padding: 1rem 0 0; }
+}
+@media (max-width: 800px) { .compose, .status-grid { grid-template-columns: 1fr; } .provider-grid { grid-template-columns: repeat(2, 1fr); } header { align-items: flex-end; } .key-map { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

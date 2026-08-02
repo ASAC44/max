@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Environment(StrEnum):
@@ -124,6 +124,44 @@ class RequoteCommand(CommandBase):
     amount_minor: int = Field(ge=1)
 
 
+class RobotPollAck(BaseModel):
+    mission_id: str = Field(min_length=8, max_length=64)
+    command_id: str = Field(min_length=8, max_length=64)
+    status: Literal["ACKNOWLEDGED"]
+    dry_run: bool
+    motion_started: bool
+
+
+class RobotHeartbeat(BaseModel):
+    robot_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    agent_version: str = Field(min_length=1, max_length=32)
+    mode: Literal["dry_run"]
+    status: Literal["IDLE", "READY", "BUSY", "DEGRADED", "EMERGENCY_STOP"]
+    subsystems: dict[
+        str,
+        Literal["healthy", "present", "degraded", "unavailable", "disabled"],
+    ]
+    last_error: str | None = Field(default=None, max_length=128)
+
+    @field_validator("subsystems")
+    @classmethod
+    def required_subsystems(cls, value):
+        required = {"camera", "gps", "imu", "audio", "motors", "emergency_stop"}
+        if set(value) != required:
+            raise ValueError("subsystems must report camera, gps, imu, audio, motors, and emergency_stop")
+        return value
+
+
+class RobotLifecycleReport(BaseModel):
+    mission_id: str = Field(min_length=8, max_length=64)
+    command_id: str = Field(min_length=8, max_length=64)
+    event_id: str = Field(min_length=8, max_length=64)
+    expected_version: int = Field(ge=0)
+    stage: Literal["AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED"]
+    dry_run: Literal[True]
+    motion_started: Literal[False]
+
+
 class EventView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -165,9 +203,24 @@ class CheckoutView(BaseModel):
     latest_attempt: AttemptView | None
 
 
+class RobotJobView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    command_id: str
+    expected_version: int
+    destination: str
+    dry_run: bool
+    trigger_source: str
+    trigger_status: str
+    status: str
+    created_at: datetime
+    delivered_at: datetime | None
+    acknowledged_at: datetime | None
+
+
 class PaymentActionView(BaseModel):
     provider: Literal["PRAVA"]
-    environment: Literal["sandbox"]
+    environment: Literal["sandbox", "production"]
     session_id: str
     order_id: str
     approval_url: str
@@ -198,3 +251,5 @@ class MissionView(BaseModel):
     approval: ApprovalView
     checkout: CheckoutView
     payment_action: PaymentActionView | None = None
+    robot_job: RobotJobView | None = None
+    source_order_events: list[EventView] = Field(default_factory=list)

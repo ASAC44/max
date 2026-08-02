@@ -1,0 +1,16 @@
+[Unit]
+Description=Max authenticated Pi mission bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/max-robot/bridge.env
+ExecStart=/usr/bin/python3 %h/.local/lib/max_robot_bridge.py --host 0.0.0.0 --port 8081
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

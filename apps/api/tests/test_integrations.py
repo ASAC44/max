@@ -6,8 +6,68 @@ from types import SimpleNamespace
 import httpx
 
 import max_api.integrations as integrations
-from max_api.integrations import IntegrationError, PravaClient, SwiggyBrowserCheckout, SwiggyClient, _tool_arguments
+from max_api.integrations import (
+    IntegrationError,
+    PravaClient,
+    RobotClient,
+    SwiggyBrowserCheckout,
+    SwiggyClient,
+    _nested_integration_error,
+    _tool_arguments,
+)
 from max_api.schemas import BudgetMeaning, Environment, Quote, QuoteLine, ShoppingIntent
+
+
+def test_pi_robot_client_accepts_only_matching_dry_run_ack(monkeypatch):
+    monkeypatch.setenv("MAX_ROBOT_URL", "http://192.168.137.43:8081")
+    monkeypatch.setenv("MAX_ROBOT_TOKEN", "test-robot-token-123456789")
+
+    async def handler(request):
+        assert request.headers["authorization"] == "Bearer test-robot-token-123456789"
+        payload = json.loads(request.content)
+        return httpx.Response(200, json={
+            "mission_id": payload["mission_id"],
+            "command_id": payload["command_id"],
+            "status": "ACKNOWLEDGED",
+            "dry_run": True,
+            "motion_started": False,
+        })
+
+    ack = asyncio.run(RobotClient(httpx.MockTransport(handler)).dispatch(
+        mission_id="mission-safe",
+        command_id="command-safe",
+        destination="home",
+        dry_run=True,
+    ))
+    assert ack.status == "ACKNOWLEDGED"
+    assert not ack.motion_started
+
+
+def test_pi_robot_client_rejects_motion_during_dry_run(monkeypatch):
+    monkeypatch.setenv("MAX_ROBOT_URL", "http://192.168.137.43:8081")
+    monkeypatch.setenv("MAX_ROBOT_TOKEN", "test-robot-token-123456789")
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        return httpx.Response(200, json={
+            "mission_id": payload["mission_id"],
+            "command_id": payload["command_id"],
+            "status": "ACKNOWLEDGED",
+            "dry_run": True,
+            "motion_started": True,
+        })
+
+    try:
+        asyncio.run(RobotClient(httpx.MockTransport(handler)).dispatch(
+            mission_id="mission-safe",
+            command_id="command-safe",
+            destination="home",
+            dry_run=True,
+        ))
+    except IntegrationError as exc:
+        assert "motion during a dry run" in str(exc)
+    else:
+        raise AssertionError("unsafe robot acknowledgement was accepted")
 
 
 def test_swiggy_parsers_return_only_quote_safe_fields():
@@ -28,10 +88,18 @@ def test_swiggy_parsers_return_only_quote_safe_fields():
         }],
     }
     address = SwiggyClient._select_address(payload, "home")
+    verbose_address = SwiggyClient._select_address(payload, "my saved Home address")
     product = SwiggyClient._select_product(payload)
     assert address["addressId"] == "addr-safe"
+    assert verbose_address["addressId"] == "addr-safe"
     assert product == ("Amul Gold Milk 1 Ltr", "S8PF9T8YLG", 7200)
     assert "must-not-escape" not in json.dumps(product)
+
+
+def test_swiggy_business_error_is_recovered_from_task_group():
+    expected = IntegrationError("No saved Swiggy address matches the requested destination")
+    wrapped = ExceptionGroup("task group", [RuntimeError("transport cleanup"), expected])
+    assert _nested_integration_error(wrapped) is expected
 
 
 def test_swiggy_live_update_cart_contract():
@@ -48,6 +116,97 @@ def test_swiggy_live_update_cart_contract():
         "selectedAddressId": "addr-safe",
         "items": [{"spinId": "spin-safe", "quantity": 1}],
     }
+
+
+def test_swiggy_order_status_correlation_is_exact_and_redacted():
+    quote = Quote(
+        revision=1,
+        merchant="SWIGGY_INSTAMART",
+        product_name="Meal",
+        variant_id="meal-safe",
+        quantity=1,
+        amount_minor=10_000,
+        currency="INR",
+        destination="home",
+        environment=Environment.PRODUCTION,
+        expires_at="2026-08-01T12:15:00Z",
+        line_items=[],
+    )
+    snapshot = SwiggyClient._select_order_snapshot(
+        {
+            "orders": [
+                {
+                    "orderId": "wrong-order",
+                    "orderStatus": "Delivered",
+                    "totalAmount": "50.00",
+                    "items": [{"name": "Milk"}],
+                },
+                {
+                    "orderId": "safe-order",
+                    "orderStatus": "Out for delivery",
+                    "totalAmount": "100.00",
+                    "items": [{"name": "Meal"}],
+                    "deliveryEta": "10 min",
+                    "mobile": "must-not-escape",
+                },
+            ]
+        },
+        None,
+        quote,
+    )
+    assert snapshot.provider_order_id == "safe-order"
+    assert snapshot.raw_status == "Out for delivery"
+    assert snapshot.eta_text == "10 min"
+    assert "must-not-escape" not in repr(snapshot)
+
+
+def test_swiggy_tracking_accepts_known_order_payload_without_repeating_id():
+    quote = Quote(
+        revision=1,
+        merchant="SWIGGY_INSTAMART",
+        product_name="Meal",
+        variant_id="meal-safe",
+        quantity=1,
+        amount_minor=10_000,
+        currency="INR",
+        destination="home",
+        environment=Environment.PRODUCTION,
+        expires_at="2026-08-01T12:15:00Z",
+        line_items=[],
+    )
+    snapshot = SwiggyClient._select_order_snapshot(
+        {"deliveryStatus": "Delivery partner has arrived", "eta": "now"},
+        "safe-order",
+        quote,
+    )
+    assert snapshot.provider_order_id == "safe-order"
+    assert snapshot.raw_status == "Delivery partner has arrived"
+
+
+def test_swiggy_initial_order_correlation_requires_positive_evidence():
+    quote = Quote(
+        revision=1,
+        merchant="SWIGGY_INSTAMART",
+        product_name="Meal",
+        variant_id="meal-safe",
+        quantity=1,
+        amount_minor=10_000,
+        currency="INR",
+        destination="home",
+        environment=Environment.PRODUCTION,
+        expires_at="2026-08-01T12:15:00Z",
+        line_items=[],
+    )
+    try:
+        SwiggyClient._select_order_snapshot(
+            {"orders": [{"orderId": "unproven", "orderStatus": "Confirmed"}]},
+            None,
+            quote,
+        )
+    except IntegrationError as exc:
+        assert "exactly one approved order" in str(exc)
+    else:
+        raise AssertionError("an uncorrelated order was accepted")
 
 
 def test_swiggy_rejects_an_unserviceable_cart():
@@ -169,6 +328,97 @@ def test_prava_callback_is_optional(monkeypatch):
     monkeypatch.setenv("PRAVA_USER_EMAIL", "owner@example.test")
     monkeypatch.delenv("PRAVA_CALLBACK_URL", raising=False)
     PravaClient(httpx.MockTransport(lambda _request: httpx.Response(200, json={})))
+
+
+def test_prava_readiness_checks_sandbox_health_without_creating_session(monkeypatch):
+    monkeypatch.setenv("PRAVA_SECRET_KEY", "sk_test_safe")
+    monkeypatch.setenv("PRAVA_USER_ID", "owner-safe")
+    monkeypatch.setenv("PRAVA_USER_EMAIL", "owner@example.test")
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json={"status": "ok"})
+
+    result = asyncio.run(PravaClient(httpx.MockTransport(handler)).readiness())
+    assert result["connected"] is True
+    assert result["money_mode"] == "test_only"
+    assert requests == [("GET", "/health")]
+
+
+def test_prava_production_environment_uses_live_host_and_checkout_origin(monkeypatch):
+    monkeypatch.setenv("PRAVA_SECRET_KEY", "sk_live_safe")
+    monkeypatch.setenv("PRAVA_ENVIRONMENT", "production")
+    monkeypatch.setenv("PRAVA_USER_ID", "owner-safe")
+    monkeypatch.setenv("PRAVA_USER_EMAIL", "owner@example.test")
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append((request.method, request.url.host, request.url.path))
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(201, json={
+            "session_id": "ses_live",
+            "session_token": "must-not-be-returned",
+            "iframe_url": "https://checkout.prava.space/s/ses_live",
+            "order_id": "ord_live",
+            "expires_at": "2026-08-02T12:15:00Z",
+        })
+
+    quote = Quote(
+        revision=1,
+        merchant="SWIGGY_INSTAMART",
+        product_name="Meal",
+        variant_id="meal-safe",
+        quantity=1,
+        amount_minor=10_000,
+        currency="INR",
+        destination="home",
+        environment=Environment.PRODUCTION,
+        expires_at="2026-08-02T12:15:00Z",
+        line_items=[
+            QuoteLine(description="Meal", unit_price_minor=10_000, quantity=1)
+        ],
+    )
+    client = PravaClient(httpx.MockTransport(handler))
+    readiness = asyncio.run(client.readiness())
+    session = asyncio.run(client.create_session(quote))
+    assert readiness["environment"] == "production"
+    assert readiness["money_mode"] == "live"
+    assert session.approval_url.startswith("https://checkout.prava.space/")
+    assert requests == [
+        ("GET", "api.prava.space", "/health"),
+        ("POST", "api.prava.space", "/v1/sessions"),
+    ]
+
+
+def test_prava_environment_rejects_a_key_prefix_mismatch(monkeypatch):
+    monkeypatch.setenv("PRAVA_SECRET_KEY", "sk_test_safe")
+    monkeypatch.setenv("PRAVA_ENVIRONMENT", "production")
+    monkeypatch.setenv("PRAVA_USER_ID", "owner-safe")
+    monkeypatch.setenv("PRAVA_USER_EMAIL", "owner@example.test")
+    try:
+        PravaClient()
+    except IntegrationError as exc:
+        assert "sk_live_" in str(exc)
+    else:
+        raise AssertionError("Prava accepted a sandbox key in production mode")
+
+
+def test_prava_session_revocation_requires_provider_confirmation(monkeypatch):
+    monkeypatch.setenv("PRAVA_SECRET_KEY", "sk_test_safe")
+    monkeypatch.setenv("PRAVA_USER_ID", "owner-safe")
+    monkeypatch.setenv("PRAVA_USER_EMAIL", "owner@example.test")
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json={"success": True})
+
+    asyncio.run(
+        PravaClient(httpx.MockTransport(handler)).revoke_session("ses_safe")
+    )
+    assert requests == [("POST", "/v1/sessions/ses_safe/revoke")]
 
 
 def test_prava_credential_stays_redacted_and_decline_is_reported(monkeypatch):
