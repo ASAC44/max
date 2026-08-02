@@ -156,10 +156,11 @@ function EmptyMission({ error, history = false }) {
 export function LiveMission() {
   const { data: mission, error } = usePublicData("/api/public/missions/active", 5000);
   const { data: robot, error: robotError } = usePublicData("/api/public/robot", 5000);
-  const recentEvents = mission?.events.slice(-7) || [];
-  const robotPhases = ["READY_TO_DISPATCH", "EN_ROUTE_TO_PICKUP", "AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED"];
-  const robotActive = mission && robotPhases.includes(mission.phase);
   const activity = mission ? missionActivity(mission.updated_at) : null;
+  const currentMission = mission && activity.tone !== "waiting";
+  const recentEvents = currentMission ? mission.events.slice(-7) : [];
+  const robotPhases = ["READY_TO_DISPATCH", "EN_ROUTE_TO_PICKUP", "AT_PICKUP", "ITEM_SECURED", "RETURNING", "COMPLETED"];
+  const robotActive = currentMission && robotPhases.includes(mission.phase);
 
   return (
     <PublicShell>
@@ -196,7 +197,7 @@ export function LiveMission() {
         </article>
       </section>
 
-      {!mission ? <EmptyMission error={error} /> : (
+      {!currentMission ? <EmptyMission error={error} /> : (
         <>
 
           <section className="mission-data-grid">
