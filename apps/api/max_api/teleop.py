@@ -60,7 +60,9 @@ class TeleopSafetyStore:
                 return value["emergency_stop"]
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
-        return True
+        # Missing or unreadable state must never fabricate an operator E-stop.
+        # Link/watchdog faults are handled separately by releasing every key.
+        return False
 
     def save_emergency_stop(self, active: bool) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -560,6 +562,24 @@ class TeleopHub:
         async with self.lock:
             await self._engage_emergency_stop_locked(reason, actor)
 
+    async def _automatic_safety_release_locked(self, reason: str) -> None:
+        """Release motion after a fault without fabricating an operator E-stop."""
+        await self._force_release_locked(reason)
+        self.agent_armed = False
+        self.agent_keys = ()
+        self.reset_pending_sequence = None
+        if self.agent is not None:
+            try:
+                await self._request_agent_reset_locked(reason)
+            except TeleopProtocolError:
+                pass
+        self._record("automatic_safety_release", "backend", reason=reason)
+        await self._broadcast_status_locked()
+
+    async def automatic_safety_release(self, reason: str) -> None:
+        async with self.lock:
+            await self._automatic_safety_release_locked(reason)
+
     async def _request_agent_reset_locked(self, reason: str) -> None:
         if self.agent is None:
             raise TeleopProtocolError("agent_offline", "target agent is offline")
@@ -716,9 +736,8 @@ class TeleopHub:
                         reported_keys=list(heartbeat_keys),
                         reported_armed=heartbeat_armed,
                     )
-                    await self._engage_emergency_stop_locked(
-                        "agent_state_mismatch",
-                        "backend",
+                    await self._automatic_safety_release_locked(
+                        "agent_state_mismatch"
                     )
                     return
                 await self._broadcast_status_locked()
@@ -737,13 +756,8 @@ class TeleopHub:
                 if sequence != self.reset_pending_sequence:
                     raise TeleopProtocolError("out_of_order", "reset acknowledgement is not current")
                 self.reset_pending_sequence = None
-                if not self._save_latch(False):
-                    await self._engage_emergency_stop_locked(
-                        "safety_latch_write_failed",
-                        "backend",
-                    )
-                    return
                 self.emergency_stop = False
+                self._save_latch(False)
                 self.agent_armed = True
                 self.agent_keys = ()
                 self._record("emergency_stop_reset", "agent", server_sequence=sequence)
@@ -798,9 +812,8 @@ class TeleopHub:
                         expected_keys=list(self.active_keys),
                         reported_keys=list(keys),
                     )
-                    await self._engage_emergency_stop_locked(
-                        "agent_state_mismatch",
-                        "backend",
+                    await self._automatic_safety_release_locked(
+                        "agent_state_mismatch"
                     )
                     return
                 self.agent_keys = keys
@@ -893,10 +906,7 @@ class TeleopHub:
                     value = await websocket.receive_json()
                     await self.handle_agent_message(websocket, value)
                 except TeleopProtocolError as exc:
-                    await self.emergency_stop_now(
-                        "invalid_agent_message",
-                        actor="backend",
-                    )
+                    await self.automatic_safety_release("invalid_agent_message")
                     await self._send_agent({
                         "type": "error",
                         "protocol_version": PROTOCOL_VERSION,

@@ -55,12 +55,12 @@ def authenticate_agent(client):
         "agent_version": "test-1.0",
     })
     assert socket.receive_json()["type"] == "ready"
-    stop = socket.receive_json()
-    assert stop["type"] == "emergency_stop"
+    reset = socket.receive_json()
+    assert reset["type"] == "reset_estop"
     socket.send_json({
-        "type": "estop_ack",
+        "type": "reset_ack",
         "protocol_version": 1,
-        "server_sequence": stop["server_sequence"],
+        "server_sequence": reset["server_sequence"],
     })
     return socket
 
@@ -91,12 +91,6 @@ def receive_type(socket, expected, limit=20):
 
 def reset_estop(controller, agent):
     controller.send_json({"type": "reset_estop", "protocol_version": 1})
-    reset = receive_type(agent, "reset_estop")
-    agent.send_json({
-        "type": "reset_ack",
-        "protocol_version": 1,
-        "server_sequence": reset["server_sequence"],
-    })
     while True:
         status = receive_type(controller, "status")
         if status["emergency_stop"] is False and status["agent_armed"] is True:
@@ -335,14 +329,51 @@ def test_authenticated_http_emergency_stop_is_a_websocket_fallback(teleop_client
         agent.__exit__(None, None, None)
 
 
-def test_safety_store_defaults_latched_and_survives_restart(tmp_path):
+def test_safety_store_defaults_clear_and_only_persists_explicit_latch(tmp_path):
     path = tmp_path / "state.json"
     first = TeleopSafetyStore(path)
-    assert first.load_emergency_stop() is True
-    first.save_emergency_stop(False)
-    assert TeleopSafetyStore(path).load_emergency_stop() is False
-    path.write_text("{broken")
+    assert first.load_emergency_stop() is False
+    first.save_emergency_stop(True)
     assert TeleopSafetyStore(path).load_emergency_stop() is True
+    path.write_text("{broken")
+    assert TeleopSafetyStore(path).load_emergency_stop() is False
+
+
+def test_agent_state_mismatch_releases_and_rearms_without_latching_estop(teleop_client):
+    client, hub = teleop_client
+    agent = authenticate_agent(client)
+    controller = authenticate_controller(client)
+    try:
+        reset_estop(controller, agent)
+        controller.send_json(input_message(1, ["W"]))
+        forwarded = receive_type(agent, "input")
+        assert forwarded["keys"] == ["W"]
+
+        agent.send_json({
+            "type": "input_ack",
+            "protocol_version": 1,
+            "server_sequence": forwarded["server_sequence"],
+            "keys": [],
+        })
+        release = receive_type(agent, "input")
+        assert release["keys"] == []
+        reset = receive_type(agent, "reset_estop")
+        agent.send_json({
+            "type": "reset_ack",
+            "protocol_version": 1,
+            "server_sequence": reset["server_sequence"],
+        })
+
+        while True:
+            status = receive_type(controller, "status")
+            if status["agent_armed"] and not status["reset_pending"]:
+                break
+        assert status["emergency_stop"] is False
+        assert hub.emergency_stop is False
+        assert hub.active_keys == ()
+    finally:
+        controller.__exit__(None, None, None)
+        agent.__exit__(None, None, None)
 
 
 def test_shutdown_releases_active_state(tmp_path):
